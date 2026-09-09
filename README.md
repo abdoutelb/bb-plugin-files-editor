@@ -1,8 +1,9 @@
 # bb-plugin-files-editor
 
-A file explorer and editor for the workspace behind a bb thread, laid out the
-way an editor is: a searchable tree on the left, tabs across the top, and the
-whole file in the middle.
+A VS Code-style file explorer and editor for the workspace behind a bb thread,
+laid out the way an editor is: a searchable file tree on the left, editor tabs
+across the top, and the whole file in the middle — syntax highlighted, with
+find in file, and editable.
 
 ![The Files panel: project and worktree pickers over a file tree, tabs, find-in-file, and the open file](https://raw.githubusercontent.com/abdoutelb/bb-plugin-files-editor/main/docs/preview.png)
 
