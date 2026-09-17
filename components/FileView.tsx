@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { experimental_SourceCode as SourceCode } from "@get-bb/plugin-sdk/app";
+import {
+  Markdown,
+  experimental_SourceCode as SourceCode,
+} from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { formatBytes, languageLabel } from "@/lib/file-kind";
@@ -133,7 +136,12 @@ function TextFileView({
   const caretRef = useRef(0);
   const nonceRef = useRef(0);
 
-  const isFindOpen = findRequest > 0;
+  // Find reads the file's text: its offsets index the markdown source, and it
+  // reveals a hit through the source viewer's line highlight. The rendered pane
+  // has neither, so the bar would count matches it cannot show. ⌘F switches a
+  // preview tab to Read; this covers the other way in — switching to a preview
+  // tab while the bar is already open.
+  const isFindOpen = findRequest > 0 && tab.mode !== "preview";
 
   // Each file gets its own find session. Without this, switching tabs would
   // leave the previous file's query counting matches in the new one.
@@ -188,8 +196,24 @@ function TextFileView({
   // observable from here. So hold the top while the content is still growing,
   // and let go the moment the reader touches it.
   const viewRef = useRef<HTMLDivElement | null>(null);
+  const seenPathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (tab.isEditing) return;
+    // Recorded before the mode check, so a tab that spent its first renders in
+    // preview still counts as seen once it flips to read.
+    const isSameFile = seenPathRef.current === tab.path;
+    seenPathRef.current = tab.path;
+    // Only the read branch mounts the viewer this reaches for. In preview the
+    // query below would find nothing and reschedule itself every frame for as
+    // long as the tab stays open.
+    if (tab.mode !== "read") return;
+    // Flipping THIS file to read with a hit already selected is what ⌘F on a
+    // preview tab produces: the reveal and the pin land in the same commit, and
+    // the top, re-pinned on every resize for the next 1500ms, would win.
+    // Whoever asked for the hit asked for the scroll. Another file is a
+    // different matter — the previous tab's query survives into its first
+    // render, and a hit belonging to a file the reader just left must not cost
+    // this one the top it is supposed to open at.
+    if (isSameFile && active !== undefined) return;
     const root = viewRef.current;
     if (root === null) return;
 
@@ -235,7 +259,10 @@ function TextFileView({
       window.clearTimeout(timer);
       observer?.disconnect();
     };
-  }, [tab.path, tab.isEditing]);
+    // `active` is read but not depended on: stepping to the next hit must not
+    // re-run this and pin a file the reader is already moving around in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.path, tab.mode]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -254,7 +281,7 @@ function TextFileView({
         />
       ) : null}
       <SaveNotice tab={tab} onReload={onReload} onOverwrite={onOverwrite} />
-      {tab.isEditing ? (
+      {tab.mode === "edit" ? (
         <CodeEditor
           path={tab.path}
           value={content}
@@ -265,6 +292,24 @@ function TextFileView({
             caretRef.current = position;
           }}
         />
+      ) : tab.mode === "preview" ? (
+        // The mirror image of the branch below. Markdown's root is a plain
+        // block that grows to its content and owns no scrolling at all, so the
+        // scrollport has to come from here, or the pane is simply clipped at
+        // the first screen. The inner div is only a measure: prose run to the
+        // full width of a widescreen panel is unreadable, and the host styles
+        // everything within it.
+        //
+        // `content` is the draft where there is one — flipping to Preview
+        // mid-edit has to show what the tab's dirty dot is promising.
+        // Keyed: this div is the scrollport, and React would otherwise reuse
+        // the node across a tab switch, opening the next document at the
+        // scroll offset of the last one.
+        <div key={tab.path} className="min-h-0 flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-[52rem] p-5">
+            <Markdown content={content} />
+          </div>
+        </div>
       ) : (
         // Deliberately NOT wrapped in a scroll container. SourceCode's own root
         // is `flex-1 overflow-y-auto` — it means to be the scrollport. Wrapping
@@ -439,7 +484,7 @@ function SaveNotice({
   if (tab.save.kind === "error") {
     return <NoticeRow tone="error">{tab.save.message}</NoticeRow>;
   }
-  if (tab.file?.kind === "text" && !tab.file.editable && tab.isEditing) {
+  if (tab.file?.kind === "text" && !tab.file.editable && tab.mode === "edit") {
     return (
       <NoticeRow tone="warning">
         This file is too large to edit here — it is shown read-only.

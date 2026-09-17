@@ -27,11 +27,13 @@ with invented project data, so no real repository or thread titles appear in it.
   its checkout or one of its worktrees by branch name. Picking a project lands
   on its checkout.
 - **Click a file and it opens in full** — its own tab, the complete contents,
-  syntax-highlighted by BB's own source renderer, in your BB code theme.
-- **Edit and save.** A Read / Edit toggle switches the pane to an editor;
-  <kbd>⌘S</kbd> writes. Saves are guarded by the hash the file had when you
-  opened it, so if an agent edited it underneath you the save stops and offers
-  *Reload* or *Overwrite* rather than clobbering the change.
+  syntax-highlighted by BB's own source renderer, in your BB code theme. A
+  markdown file opens rendered instead, the way BB renders a chat message.
+- **Edit and save.** A Read / Edit toggle switches the pane to an editor — with
+  a third *Preview* segment on a markdown file; <kbd>⌘S</kbd> writes. Saves are
+  guarded by the hash the file had when you opened it, so if an agent edited it
+  underneath you the save stops and offers *Reload* or *Overwrite* rather than
+  clobbering the change.
 - **Images render**, other binaries say so instead of dumping bytes.
 - **`bb files`** gives an agent the same listing from the CLI.
 
@@ -92,7 +94,8 @@ bb plugin dev                         # rebuild + reload on save
 
 `lib/` holds the logic worth testing on its own — tree assembly, the fuzzy
 ranker, in-file search, workspace grouping, workspace-relative path resolution,
-route encoding. `server.ts` is mostly wiring; the components are the view.
+route encoding, what counts as previewable markdown. `server.ts` is mostly
+wiring; the components are the view.
 
 ## Limits
 
@@ -109,6 +112,12 @@ route encoding. `server.ts` is mostly wiring; the components are the view.
   those, BB's builtin **File Editor** (Monaco) plugin claims the file-preview
   surface; the ↗ button in the toolbar hands it the current file.
 - Reading, a find hit highlights its whole line, because line ranges are what
-  BB's source viewer accepts. Editing selects the exact match.
-- Files over 4 MB open read-only.
+  BB's source viewer accepts. Editing selects the exact match. Previewing there
+  is nothing to highlight — the offsets point into the markdown source, not into
+  what is on screen — so <kbd>⌘F</kbd> switches the pane to *Read* first.
+- *Preview* is BB's chat-message renderer, which knows nothing about where the
+  file lives, so relative image and link paths do not resolve against the
+  workspace. What it makes of raw HTML is its own business, not this plugin's.
+- Files over 4 MB open read-only, and markdown over 1 MB opens as source —
+  rendering is one pass over the whole document, with nothing virtualized.
 - The tree does not create, rename, or delete files.

@@ -3,6 +3,7 @@ import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../server.js";
 import type { ScopeRef } from "@/lib/route";
 import { sameScope } from "@/lib/route";
+import { canPreviewMarkdown, isMarkdownPath } from "@/lib/markdown";
 
 export type FileContent =
   | {
@@ -26,6 +27,9 @@ export type FileContent =
       reason: string;
     };
 
+/** What the pane shows: rendered markdown, BB's source viewer, or an editor. */
+export type FileViewMode = "preview" | "read" | "edit";
+
 export type SaveState =
   | { kind: "clean" }
   | { kind: "saving" }
@@ -40,7 +44,7 @@ export interface FileTab {
   draft: string | null;
   /** The hash the draft is based on — the compare-and-swap guard on save. */
   sha256: string | null;
-  isEditing: boolean;
+  mode: FileViewMode;
   save: SaveState;
 }
 
@@ -63,7 +67,7 @@ export interface FileTabsApi {
   closeAll(): void;
   activate(path: string): void;
   setDraft(path: string, draft: string): void;
-  setEditing(path: string, isEditing: boolean): void;
+  setMode(path: string, mode: FileViewMode): void;
   save(): void;
   overwrite(): void;
   reload(path?: string): void;
@@ -140,6 +144,14 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
             error: null,
             draft: null,
             sha256: file.kind === "text" ? file.sha256 : null,
+            // A tab opens in preview off its name alone. This is the first
+            // moment its size is known, and a document too large to render has
+            // to fall back to source rather than freeze the surface.
+            mode:
+              tab.mode !== "preview" ||
+              (file.kind === "text" && canPreviewMarkdown(path, file.sizeBytes))
+                ? tab.mode
+                : "read",
             save: { kind: "clean" },
           }));
         })
@@ -168,7 +180,10 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
         error: null,
         draft: null,
         sha256: null,
-        isEditing: false,
+        // The read has not been issued yet, so the path is all there is to go
+        // on: markdown is worth reading rendered, everything else is source.
+        // Whether the file is small enough to render is settled in `load`.
+        mode: isMarkdownPath(path) ? "preview" : "read",
         save: { kind: "clean" },
       };
       setTabs((current) => {
@@ -269,6 +284,14 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
             ...current,
             save: { kind: "clean" },
             sha256: result.sha256,
+            // The same fallback `load` applies, for the other way a tab's size
+            // changes: writing past the cap would otherwise leave the segment
+            // disabled while the pane it selects keeps rendering.
+            mode:
+              current.mode === "preview" &&
+              !canPreviewMarkdown(path, result.sizeBytes)
+                ? "read"
+                : current.mode,
             // Keep anything typed while the write was in flight; only the text
             // that actually reached disk stops counting as an edit.
             draft: current.draft === content ? null : current.draft,
@@ -309,8 +332,8 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
       (path, draft) => patch(path, (tab) => ({ ...tab, draft })),
       [patch],
     ),
-    setEditing: useCallback(
-      (path, isEditing) => patch(path, (tab) => ({ ...tab, isEditing })),
+    setMode: useCallback(
+      (path, mode) => patch(path, (tab) => ({ ...tab, mode })),
       [patch],
     ),
     save: useCallback(() => {
