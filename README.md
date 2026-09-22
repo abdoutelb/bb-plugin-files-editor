@@ -17,12 +17,18 @@ with invented project data, so no real repository or thread titles appear in it.
 - **A Files tab beside a thread** — right panel → new tab → *Project files*.
   Pinned to that thread's workspace, so it shows the files the agent in that
   conversation is editing.
-- **Two searches.** At the top of the tree, type to prune it to matching paths
-  with every directory above them opened; <kbd>⌘P</kbd> opens the ranked
-  go-to-file palette instead. Inside a file, the magnifier in the toolbar (or
-  <kbd>⌘F</kbd>) finds text: match count, <kbd>Enter</kbd> / <kbd>⇧Enter</kbd>
-  to step, `Aa` for case, and the hit is revealed whether you are reading or
-  editing.
+- **Search in files.** The field at the top of the tree searches the *text* of
+  every file in the workspace (<kbd>⌘⇧F</kbd>). Results are grouped by file with
+  each hit highlighted; click one and the file opens on that line. It is smart
+  case — lowercase finds any case, a capital makes it exact — with VS Code's
+  toggles beside it: `Aa` match case (<kbd>⌥C</kbd>), `ab` whole word
+  (<kbd>⌥W</kbd>), `.*` regex (<kbd>⌥R</kbd>). File contents are kept in memory
+  between searches, so refining a query re-runs in tens of milliseconds.
+- **Go to file by name.** The magnifier beside the field (<kbd>⌘P</kbd>) is the
+  ranked file-name palette, with arrow keys and Enter.
+- **Find in file.** Inside the open file, the magnifier in the toolbar (or
+  <kbd>⌘F</kbd>): match count, <kbd>Enter</kbd> / <kbd>⇧Enter</kbd> to step, `Aa`
+  for case, and the hit is revealed whether you are reading or editing.
 - **Project, then workspace.** Two dependent pickers — choose the project, then
   its checkout or one of its worktrees by branch name. Picking a project lands
   on its checkout.
@@ -91,8 +97,8 @@ bb plugin dev                         # rebuild + reload on save
 ```
 
 `lib/` holds the logic worth testing on its own — tree assembly, the fuzzy
-ranker, in-file search, workspace grouping, workspace-relative path resolution,
-route encoding. `server.ts` is mostly wiring; the components are the view.
+ranker, in-file find, project-wide text search and its content cache, workspace
+grouping, workspace-relative path resolution, route encoding. `server.ts` is mostly wiring; the components are the view.
 
 ## Limits
 
@@ -105,10 +111,21 @@ route encoding. `server.ts` is mostly wiring; the components are the view.
   it cut. BB discards an oversize result rather than truncating it, so the
   clipping is the difference between a partial answer and none.
 - The editor is a textarea with a gutter, not a code editor: no completion and
-  no multiple cursors, and find is literal text — no regex, no replace. For
+  no multiple cursors, and find in the open file is literal text — no regex,
+  no replace (Search in files does take a regex). For
   those, BB's builtin **File Editor** (Monaco) plugin claims the file-preview
   surface; the ↗ button in the toolbar hands it the current file.
 - Reading, a find hit highlights its whole line, because line ranges are what
   BB's source viewer accepts. Editing selects the exact match.
+- Search in files stops at 2,000 hits, 500 files or 10 seconds, and says so.
+  It honours *Excluded directories*, skips binaries and files over 2 MB, and
+  searches dotfiles only when the eye toggle shows them.
+- A regex runs in its own worker thread with a 3-second deadline. The plugin
+  lives inside BB's server, so a pattern that backtracks catastrophically would
+  otherwise freeze all of BB; instead it is stopped and reported. Patterns use
+  JavaScript syntax.
+- On a connected machine, search goes through BB's file API one file at a time:
+  it covers the first 3,000 files, keeps them for a minute, and cannot see
+  dotfiles.
 - Files over 4 MB open read-only.
 - The tree does not create, rename, or delete files.

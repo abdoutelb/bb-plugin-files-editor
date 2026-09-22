@@ -20,6 +20,8 @@ export interface FileViewProps {
    */
   findRequest: number;
   onCloseFind: () => void;
+  /** A search hit to bring into view in this file; `nonce` re-reveals the same line. */
+  revealLine: { line: number; nonce: number } | null;
 }
 
 /** A range to select in the editor; `nonce` re-applies an unchanged range. */
@@ -38,6 +40,7 @@ export function FileView({
   onRetry,
   findRequest,
   onCloseFind,
+  revealLine,
 }: FileViewProps) {
   const file = tab.file;
 
@@ -98,6 +101,7 @@ export function FileView({
       onOverwrite={onOverwrite}
       findRequest={findRequest}
       onCloseFind={onCloseFind}
+      revealLine={revealLine}
     />
   );
 }
@@ -116,6 +120,7 @@ function TextFileView({
   onOverwrite,
   findRequest,
   onCloseFind,
+  revealLine,
 }: {
   tab: FileTab;
   content: string;
@@ -125,6 +130,7 @@ function TextFileView({
   onOverwrite: () => void;
   findRequest: number;
   onCloseFind: () => void;
+  revealLine: { line: number; nonce: number } | null;
 }) {
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -181,13 +187,23 @@ function TextFileView({
 
   // SourceCode owns its scrollport, and it comes up scrolled to the END of the
   // file — so a freshly opened file showed its last line and would not scroll
-  // down, because it was already there.
+  // down, because it was already there. Nor does it scroll to a highlighted
+  // range it is mounted with, so a search hit would open at the wrong place.
   //
-  // One reset is not enough: the viewer settles its position after the content
-  // has been measured and highlighted, which is several frames out and not
-  // observable from here. So hold the top while the content is still growing,
-  // and let go the moment the reader touches it.
+  // So this places the view itself: at the top, or at the revealed line. One
+  // placement is not enough — the viewer settles after the content has been
+  // measured and highlighted, several frames out — so it holds the position
+  // while the content is still growing, and lets go the moment the reader
+  // touches it.
   const viewRef = useRef<HTMLDivElement | null>(null);
+  const targetLine = revealLine?.line ?? null;
+  const lineCount = useMemo(() => {
+    let count = 1;
+    for (let index = 0; index < content.length; index += 1) {
+      if (content.charCodeAt(index) === 10) count += 1;
+    }
+    return count;
+  }, [content]);
   useEffect(() => {
     if (tab.isEditing) return;
     const root = viewRef.current;
@@ -205,7 +221,19 @@ function TextFileView({
         frame = requestAnimationFrame(attach);
         return;
       }
-      port.scrollTop = 0;
+
+      const place = () => {
+        if (targetLine === null) {
+          port.scrollTop = 0;
+          return;
+        }
+        // Lines never wrap here (overflow="scroll"), so every row is the same
+        // height and the content height divides evenly by the line count.
+        const lineHeight = port.scrollHeight / lineCount;
+        // A third of the way down, so the hit has context above it.
+        port.scrollTop = Math.max(0, (targetLine - 1) * lineHeight - port.clientHeight / 3);
+      };
+      place();
 
       const release = () => {
         observer?.disconnect();
@@ -219,11 +247,9 @@ function TextFileView({
       port.addEventListener("pointerdown", release);
       port.addEventListener("keydown", release);
 
-      observer = new ResizeObserver(() => {
-        port.scrollTop = 0;
-      });
-      const content = port.firstElementChild;
-      if (content !== null) observer.observe(content);
+      observer = new ResizeObserver(place);
+      const inner = port.firstElementChild;
+      if (inner !== null) observer.observe(inner);
       // A backstop, in case the content never resizes and nothing is touched.
       timer = window.setTimeout(release, 1500);
     };
@@ -235,7 +261,39 @@ function TextFileView({
       window.clearTimeout(timer);
       observer?.disconnect();
     };
-  }, [tab.path, tab.isEditing]);
+    // The nonce re-places the view when the same hit is opened again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.path, tab.isEditing, targetLine, revealLine?.nonce]);
+
+  // In the editor there is no host viewer to scroll for us: put the caret at
+  // the start of the revealed line, which the selection effect scrolls to.
+  useEffect(() => {
+    if (!tab.isEditing || revealLine === null) return;
+    let offset = 0;
+    for (let line = 1; line < revealLine.line && offset !== -1; line += 1) {
+      offset = content.indexOf("\n", offset);
+      if (offset !== -1) offset += 1;
+    }
+    if (offset === -1) return;
+    const lineEnd = content.indexOf("\n", offset);
+    caretRef.current = offset;
+    nonceRef.current += 1;
+    setSelection({
+      start: offset,
+      end: lineEnd === -1 ? content.length : lineEnd,
+      nonce: nonceRef.current,
+    });
+    // Keyed on the nonce: re-running on every keystroke would yank the caret.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealLine?.nonce, tab.isEditing]);
+
+  // A find hit wins while the find bar is in use; otherwise the search hit.
+  const highlighted =
+    active !== undefined
+      ? { start: active.line, end: active.line }
+      : revealLine !== null
+        ? { start: revealLine.line, end: revealLine.line }
+        : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -280,11 +338,7 @@ function TextFileView({
           overflow="scroll"
           // The host viewer owns scroll-into-view, so highlighting the line is
           // also what reveals it.
-          highlightedLines={
-            active === undefined
-              ? null
-              : { start: active.line, end: active.line }
-          }
+          highlightedLines={highlighted}
           className="min-h-0 flex-1 text-[13px]"
         />
         </div>
