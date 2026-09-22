@@ -4,12 +4,13 @@ import { cn } from "@/lib/utils";
 import {
   ancestorsOf,
   buildTree,
-  filterTree,
   visibleRows,
   type FlatEntry,
   type TreeRow,
 } from "@/lib/tree";
+import type { ScopeRef } from "@/lib/route";
 import { FileGlyph } from "./FileGlyph";
+import { SearchResults } from "./SearchResults";
 
 export interface ExplorerProps {
   entries: readonly FlatEntry[];
@@ -22,8 +23,14 @@ export interface ExplorerProps {
   includeHidden: boolean;
   onToggleHidden: (next: boolean) => void;
   onOpenFile: (path: string) => void;
+  /** A hit from the text search: open the file on that line. */
+  onOpenMatch: (path: string, line: number) => void;
   onRefresh: () => void;
   onQuickOpen: () => void;
+  /** The workspace the text search runs in; null while none is resolved. */
+  scope: ScopeRef | null;
+  /** Bumped by ⌘⇧F: focus the search field and select what is in it. */
+  searchFocusRequest: number;
   header: React.ReactNode;
 }
 
@@ -42,16 +49,33 @@ export function Explorer({
   includeHidden,
   onToggleHidden,
   onOpenFile,
+  onOpenMatch,
   onRefresh,
   onQuickOpen,
+  scope,
+  searchFocusRequest,
   header,
 }: ExplorerProps) {
+  // The field searches file CONTENTS across the workspace. Finding a file by
+  // its name is the magnifier button (⌘P) beside it.
   const [query, setQuery] = useState("");
+  const [matchCase, setMatchCase] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [regex, setRegex] = useState(false);
+  const [submitNonce, setSubmitNonce] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
 
+  const isSearching = query !== "" && scope !== null;
+
+  useEffect(() => {
+    if (searchFocusRequest === 0) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [searchFocusRequest]);
+
   const tree = useMemo(() => buildTree(entries), [entries]);
-  const filtered = useMemo(() => filterTree(tree, query), [tree, query]);
 
   // Reveal the active file by opening every directory above it.
   useEffect(() => {
@@ -69,17 +93,9 @@ export function Explorer({
     activeRowRef.current?.scrollIntoView({ block: "nearest" });
   }, [activePath, entries.length]);
 
-  const effectiveExpanded = useMemo(() => {
-    if (filtered.expand.size === 0) return expanded;
-    return new Set([...expanded, ...filtered.expand]);
-  }, [expanded, filtered.expand]);
-
-  const allRows = useMemo(
-    () => visibleRows(filtered.nodes, effectiveExpanded),
-    [filtered.nodes, effectiveExpanded],
-  );
-  // A one-letter query matches nearly every path in a large checkout. Cap what
-  // is mounted rather than synchronously building tens of thousands of rows.
+  const allRows = useMemo(() => visibleRows(tree, expanded), [tree, expanded]);
+  // Expanding a huge directory (or several) can mean tens of thousands of rows.
+  // Cap what is mounted rather than building them all synchronously.
   const rows = useMemo(() => {
     if (allRows.length <= ROW_LIMIT) return allRows;
     const capped = allRows.slice(0, ROW_LIMIT);
@@ -117,6 +133,7 @@ export function Explorer({
             className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
           />
           <input
+            ref={inputRef}
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -124,22 +141,61 @@ export function Explorer({
               if (event.key === "Escape" && query !== "") {
                 event.stopPropagation();
                 setQuery("");
+                return;
+              }
+              if (event.key === "Enter") {
+                event.preventDefault();
+                setSubmitNonce((current) => current + 1);
+                return;
+              }
+              // VS Code's own bindings for the three toggles.
+              if (event.altKey && !event.metaKey && !event.ctrlKey) {
+                const key = event.code;
+                if (key === "KeyC") setMatchCase((value) => !value);
+                else if (key === "KeyW") setWholeWord((value) => !value);
+                else if (key === "KeyR") setRegex((value) => !value);
+                else return;
+                event.preventDefault();
               }
             }}
-            placeholder="Search files"
-            aria-label="Search files"
+            placeholder="Search in files"
+            aria-label="Search in files"
+            title="Search the text of every file (⌘⇧F)"
             spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
             className={cn(
-              "h-7 w-full min-w-0 rounded-md border border-border bg-background pr-2 pl-7 text-sm",
+              "h-7 w-full min-w-0 rounded-md border border-border bg-background pr-[4.5rem] pl-7 text-sm",
               "text-foreground placeholder:text-muted-foreground",
               "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
               "[&::-webkit-search-cancel-button]:hidden",
             )}
           />
+          <div className="absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-px">
+            <SearchToggle
+              label="Match case (⌥C). Off: smart case — exact only when the query has a capital"
+              glyph="Aa"
+              isOn={matchCase}
+              onToggle={() => setMatchCase((value) => !value)}
+            />
+            <SearchToggle
+              label="Match whole word (⌥W)"
+              glyph="ab"
+              underline
+              isOn={wholeWord}
+              onToggle={() => setWholeWord((value) => !value)}
+            />
+            <SearchToggle
+              label="Use regular expression (⌥R)"
+              glyph=".*"
+              isOn={regex}
+              onToggle={() => setRegex((value) => !value)}
+            />
+          </div>
         </div>
         <ExplorerAction
           icon="Search"
-          label="Quick open (⌘P)"
+          label="Go to file by name (⌘P)"
           onClick={onQuickOpen}
         />
         {hiddenSupported ? (
@@ -158,39 +214,49 @@ export function Explorer({
         />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto pb-2">
-        {error !== null ? (
-          <p className="px-3 py-2 text-xs text-destructive">{error}</p>
-        ) : isLoading && entries.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">Reading the workspace…</p>
-        ) : rows.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">
-            {query === ""
-              ? "This workspace has no files yet."
-              : `No file matches “${query}”.`}
-          </p>
-        ) : (
-          <ul role="tree" aria-label="Workspace files" className="min-w-max">
-            {rows.map((row) => (
-              <ExplorerRow
-                key={row.node.path}
-                row={row}
-                query={query}
-                isActive={row.node.path === activePath}
-                activeRef={row.node.path === activePath ? activeRowRef : undefined}
-                onToggle={toggle}
-                onOpenFile={onOpenFile}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
+      {isSearching ? (
+        <SearchResults
+          scope={scope}
+          query={query}
+          matchCase={matchCase}
+          wholeWord={wholeWord}
+          regex={regex}
+          includeHidden={hiddenSupported && includeHidden}
+          submitNonce={submitNonce}
+          activePath={activePath}
+          onOpenMatch={onOpenMatch}
+        />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto pb-2">
+          {error !== null ? (
+            <p className="px-3 py-2 text-xs text-destructive">{error}</p>
+          ) : isLoading && entries.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">Reading the workspace…</p>
+          ) : rows.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              This workspace has no files yet.
+            </p>
+          ) : (
+            <ul role="tree" aria-label="Workspace files" className="min-w-max">
+              {rows.map((row) => (
+                <ExplorerRow
+                  key={row.node.path}
+                  row={row}
+                  query=""
+                  isActive={row.node.path === activePath}
+                  activeRef={row.node.path === activePath ? activeRowRef : undefined}
+                  onToggle={toggle}
+                  onOpenFile={onOpenFile}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">
-        {query === ""
-          ? `${fileCount.toLocaleString()} files`
-          : `${filtered.matchCount.toLocaleString()} of ${fileCount.toLocaleString()} files`}
-        {allRows.length > rows.length
+        {`${fileCount.toLocaleString()} files`}
+        {!isSearching && allRows.length > rows.length
           ? ` · showing first ${ROW_LIMIT.toLocaleString()}`
           : ""}
         {truncated ? " · listing truncated" : ""}
@@ -252,6 +318,41 @@ function ExplorerRow({
         </span>
       </button>
     </li>
+  );
+}
+
+function SearchToggle({
+  label,
+  glyph,
+  underline,
+  isOn,
+  onToggle,
+}: {
+  label: string;
+  glyph: string;
+  underline?: boolean;
+  isOn: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={isOn}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex h-5 w-[1.35rem] cursor-pointer items-center justify-center rounded font-mono text-[10.5px] leading-none",
+        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        isOn
+          ? "bg-primary/20 text-foreground ring-1 ring-primary/50"
+          : "text-muted-foreground hover:bg-state-hover hover:text-foreground",
+      )}
+    >
+      <span className={underline === true ? "underline underline-offset-2" : undefined}>
+        {glyph}
+      </span>
+    </button>
   );
 }
 

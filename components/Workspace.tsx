@@ -82,6 +82,13 @@ export function Workspace({
   // A counter, not a flag: pressing ⌘F again with the bar already open has to
   // re-focus and reselect the field, which an unchanged boolean cannot signal.
   const [findRequest, setFindRequest] = useState(0);
+  // ⌘⇧F focuses the explorer's text search, VS Code's binding for "search in files".
+  const [searchFocusRequest, setSearchFocusRequest] = useState(0);
+  // A search hit to reveal: the file it is in, the line, and a nonce so opening
+  // the same hit twice scrolls to it again.
+  const [reveal, setReveal] = useState<{ path: string; line: number; nonce: number } | null>(
+    null,
+  );
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const requestRef = useRef(0);
@@ -186,6 +193,7 @@ export function Workspace({
   const openFile = useCallback(
     (path: string) => {
       staleRouteFile.current = null;
+      setReveal(null);
       tabs.open(path);
       onOpenPath(path);
       setFindRequest(0);
@@ -199,6 +207,19 @@ export function Workspace({
       requestAnimationFrame(restoreFocus);
     },
     [onOpenPath, restoreFocus, tabs],
+  );
+
+  // A ref, not derived from the previous state: openFile resets the reveal to
+  // null in the same batch, so an updater would always see null and every hit
+  // would get the same nonce — and clicking one twice would not scroll again.
+  const revealNonce = useRef(0);
+  const openMatch = useCallback(
+    (path: string, line: number) => {
+      openFile(path);
+      revealNonce.current += 1;
+      setReveal({ path, line, nonce: revealNonce.current });
+    },
+    [openFile],
   );
 
   const closeTab = useCallback(
@@ -294,6 +315,12 @@ export function Workspace({
     if (isAccel && event.key.toLowerCase() === "p" && !event.shiftKey) {
       event.preventDefault();
       setIsQuickOpen(true);
+      return;
+    }
+    if (isAccel && event.shiftKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      setIsExplorerOpen(true);
+      setSearchFocusRequest((current) => current + 1);
       return;
     }
     if (isAccel && event.key.toLowerCase() === "f" && !event.shiftKey) {
@@ -411,8 +438,11 @@ export function Workspace({
                 storeHidden(next);
               }}
               onOpenFile={openFile}
+              onOpenMatch={openMatch}
               onRefresh={() => loadTree(scope, includeHidden)}
               onQuickOpen={() => setIsQuickOpen(true)}
+              scope={scope}
+              searchFocusRequest={searchFocusRequest}
               header={explorerHeader}
             />
           </div>
@@ -549,6 +579,11 @@ export function Workspace({
             onReload={() => tabs.reload()}
             onOverwrite={tabs.overwrite}
             onRetry={tabs.retry}
+            revealLine={
+              reveal !== null && reveal.path === activeTab.path
+                ? { line: reveal.line, nonce: reveal.nonce }
+                : null
+            }
             findRequest={findRequest}
             onCloseFind={() => {
               setFindRequest(0);

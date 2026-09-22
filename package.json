@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-files-editor",
-  "version": "0.1.4",
-  "description": "VS Code-style file explorer and editor for the project or worktree behind a thread: a searchable file tree, editor tabs, syntax-highlighted viewing, find in file, and edit with save.",
+  "version": "0.1.5",
+  "description": "VS Code-style file explorer and editor for the project or worktree behind a thread: search in files across the whole project, a file tree, editor tabs, syntax-highlighted viewing, find in file, and edit with save.",
   "type": "module",
   "engines": {
     "bb": ">=0.40",
@@ -9,7 +9,7 @@
   },
   "bb": {
     "name": "Files",
-    "description": "VS Code-style file explorer and editor for the project or worktree behind a thread: a searchable file tree, editor tabs, syntax-highlighted viewing, find in file, and edit with save.",
+    "description": "VS Code-style file explorer and editor for the project or worktree behind a thread: search in files across the whole project, a file tree, editor tabs, syntax-highlighted viewing, find in file, and edit with save.",
     "branding": {
       "icon": "./assets/icon.svg"
     },
@@ -74,6 +74,9 @@
     "bb-plugin",
     "files",
     "file-explorer",
+    "grep",
+    "full-text-search",
+    "search-in-files",
     "file-browser",
     "file-tree",
     "editor",

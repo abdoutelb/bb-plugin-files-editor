@@ -17,6 +17,18 @@ import {
   walkDirectory,
 } from "./lib/walk.js";
 import { clipForCli, clipLinesForCli } from "./lib/cli-output.js";
+import {
+  createInProcessExecutor,
+  createWorkerExecutor,
+} from "./lib/regex-worker.js";
+import { runSearch } from "./lib/search-run.js";
+import {
+  LocalTextCache,
+  MAX_SEARCH_FILE_BYTES,
+  RemoteTextCache,
+  createLocalSource,
+  createRemoteSource,
+} from "./lib/search-sources.js";
 
 /** BB's own recursive listing is capped at 10k; the local walk gets more room. */
 const LOCAL_ENTRY_LIMIT = 40_000;
@@ -67,6 +79,38 @@ const resolvedScopeSchema = z.object({
   environmentId: z.string().nullable(),
   ref: scopeSchema,
 });
+
+const lineMatchSchema = z.object({
+  line: z.number(),
+  column: z.number(),
+  preview: z.string(),
+  ranges: z.array(z.tuple([z.number(), z.number()])),
+  clippedStart: z.boolean(),
+  clippedEnd: z.boolean(),
+});
+
+const searchOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ok"),
+    files: z.array(
+      z.object({
+        path: z.string(),
+        matchCount: z.number(),
+        matches: z.array(lineMatchSchema),
+      }),
+    ),
+    totalMatches: z.number(),
+    searchedFiles: z.number(),
+    truncated: z.boolean(),
+    reason: z.enum(["matches", "files", "time", "listing"]).nullable(),
+    durationMs: z.number(),
+    listing: z.enum(["local", "remote"]),
+  }),
+  z.object({ status: z.literal("error"), message: z.string() }),
+  z.object({ status: z.literal("cancelled") }),
+]);
+
+export type SearchResult = z.infer<typeof searchOutcomeSchema>;
 
 export const rpcContract = defineRpcContract({
   workspaces: {
@@ -120,6 +164,20 @@ export const rpcContract = defineRpcContract({
         reason: z.string(),
       }),
     ]),
+  },
+  /** Text search across every file in the workspace — not a file-name search. */
+  searchText: {
+    input: z
+      .object({
+        scope: scopeSchema,
+        query: z.string().max(1000),
+        matchCase: z.boolean(),
+        wholeWord: z.boolean(),
+        regex: z.boolean(),
+        includeHidden: z.boolean(),
+      })
+      .strict(),
+    output: searchOutcomeSchema,
   },
   /** A lease for the plugin's own `docs/` directory, for the settings page. */
   preview: {
@@ -430,6 +488,50 @@ export default function plugin(bb: BbPluginApi) {
     return previewCache;
   }
 
+  // --- project-wide text search -------------------------------------------
+  //
+  // Held for the life of this load, so contents read by one search are there
+  // for the next. A reload builds fresh ones.
+  const localTexts = new LocalTextCache();
+  const remoteTexts = new RemoteTextCache();
+  // The file list is re-walked at most this often while someone is typing.
+  const SEARCH_LIST_FRESH_MS = 3000;
+  const searchListings = new Map<
+    string,
+    { at: number; paths: string[]; truncated: boolean }
+  >();
+  // One search in flight per workspace: a keystroke supersedes the last one.
+  const runningSearches = new Map<string, AbortController>();
+
+  const SEARCH_LIMITS = { maxMatches: 2000, maxFiles: 500, timeBudgetMs: 10_000 };
+
+  async function listSearchPaths(
+    scope: ResolvedScope,
+    includeHidden: boolean,
+  ): Promise<{ paths: string[]; truncated: boolean }> {
+    const excluded = [...(await excludedNames())].sort().join("\u0000");
+    const key = `${scope.hostId}\u0000${scope.root}\u0000${includeHidden}\u0000${excluded}`;
+    const cached = searchListings.get(key);
+    if (cached !== undefined && Date.now() - cached.at < SEARCH_LIST_FRESH_MS) {
+      return cached;
+    }
+    const listed = await listEntries(scope, includeHidden);
+    const paths = listed.entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => entry.path)
+      // Path order, so results read top to bottom the way the tree does and
+      // the same query always shows the same first page.
+      .sort((left, right) => left.localeCompare(right));
+    const fresh = { at: Date.now(), paths, truncated: listed.truncated };
+    searchListings.set(key, fresh);
+    return fresh;
+  }
+
+  function forgetSearchedFile(scope: ResolvedScope, absolutePath: string): void {
+    if (scope.isLocal) localTexts.delete(absolutePath);
+    else remoteTexts.delete(`${scope.hostId}\u0000${absolutePath}`);
+  }
+
   bb.rpc.register(rpcContract, {
     async workspaces() {
       // One request gives every project, its checkouts, and the environments
@@ -481,6 +583,55 @@ export default function plugin(bb: BbPluginApi) {
       };
     },
 
+    async searchText({ scope, query, matchCase, wholeWord, regex, includeHidden }) {
+      const resolved = await resolveScope(scope);
+      if (!resolved.ok) return { status: "error" as const, message: resolved.reason };
+      const target = resolved.scope;
+
+      const key = `${scope.kind}:${scope.id}`;
+      runningSearches.get(key)?.abort();
+      const controller = new AbortController();
+      runningSearches.set(key, controller);
+
+      const list = () => listSearchPaths(target, includeHidden);
+      const source = target.isLocal
+        ? createLocalSource({ root: target.root, list, cache: localTexts })
+        : createRemoteSource({
+            root: target.root,
+            hostId: target.hostId,
+            list,
+            cache: remoteTexts,
+            async readRemote(absolutePath) {
+              const file = await bb.sdk.files.read({
+                hostId: target.hostId,
+                path: absolutePath,
+                rootPath: target.root,
+              });
+              const usable =
+                file.contentEncoding === "utf8" && file.sizeBytes <= MAX_SEARCH_FILE_BYTES;
+              return { text: usable ? file.content : null };
+            },
+          });
+
+      try {
+        const outcome = await runSearch({
+          source,
+          query: { query, matchCase, wholeWord, regex },
+          limits: SEARCH_LIMITS,
+          signal: controller.signal,
+          now: () => performance.now(),
+          createExecutor: (pattern, flags, isUserRegex) =>
+            isUserRegex
+              ? createWorkerExecutor(pattern, flags)
+              : createInProcessExecutor(pattern, flags),
+        });
+        if (outcome.status !== "ok") return outcome;
+        return { ...outcome, listing: target.isLocal ? ("local" as const) : ("remote" as const) };
+      } finally {
+        if (runningSearches.get(key) === controller) runningSearches.delete(key);
+      }
+    },
+
     preview: () => previewLease(),
 
     async resolve({ scope }) {
@@ -528,6 +679,8 @@ export default function plugin(bb: BbPluginApi) {
         };
       }
 
+      // The next search must see what was just written, not the cached copy.
+      forgetSearchedFile(resolved.scope, absolutePath);
       bb.realtime.publish(CHANGED_CHANNEL, {
         scope,
         path: relativePath,
