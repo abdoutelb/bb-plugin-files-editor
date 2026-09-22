@@ -1,0 +1,277 @@
+<!doctype html>
+<!--
+  README illustration: the tree, editor tabs, and find in the open file.
+  Drawn, not captured — invented project data. Regenerate after a layout change:
+    chrome --headless=new --force-device-scale-factor=2 --window-size=1400,660 \
+      --screenshot=docs/find-in-file.png file://$PWD/docs/find-in-file.html
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --bg: #1b1f24;
+        --panel: #22272e;
+        --recessed: #1c2128;
+        --border: #343941;
+        --fg: #cdd9e5;
+        --muted: #7d8590;
+        --accent: #4184e4;
+        --sel: #2d333b;
+        --kw: #f47067;
+        --str: #96d0ff;
+        --fn: #dcbdfb;
+        --num: #6cb6ff;
+        --com: #768390;
+        --ok: #57ab5a;
+        --mono: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+        --ui: -apple-system, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 1400px; height: 660px;
+        background: var(--bg); color: var(--fg);
+        font-family: var(--ui); -webkit-font-smoothing: antialiased;
+        display: flex; flex-direction: column;
+      }
+      .titlebar {
+        height: 44px; flex: none; display: flex; align-items: center; gap: 9px;
+        padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--panel);
+      }
+      .titlebar .name { font-size: 13.5px; font-weight: 600; letter-spacing: .1px; }
+      .body { flex: 1; display: flex; min-height: 0; }
+
+      /* ---------- explorer ---------- */
+      .explorer {
+        width: 330px; flex: none; display: flex; flex-direction: column;
+        background: var(--recessed); border-right: 1px solid var(--border);
+      }
+      .pickers { padding: 10px 10px 6px; display: flex; flex-direction: column; gap: 6px; }
+      .select {
+        height: 30px; border: 1px solid var(--border); border-radius: 6px;
+        background: var(--panel); display: flex; align-items: center; gap: 7px;
+        padding: 0 8px; font-size: 12.5px; position: relative;
+      }
+      .select .chev { margin-left: auto; color: var(--muted); }
+      .searchrow { padding: 2px 10px 8px; display: flex; align-items: center; gap: 6px; }
+      .search {
+        flex: 1; height: 30px; border: 1px solid var(--border); border-radius: 6px;
+        background: var(--panel); display: flex; align-items: center; gap: 7px;
+        padding: 0 8px; font-size: 12.5px; color: var(--muted);
+      }
+      .iconbtn { width: 26px; height: 26px; display: grid; place-items: center; color: var(--muted); border-radius: 5px; }
+      .tree { flex: 1; overflow: hidden; padding: 2px 6px 0; }
+      .row {
+        display: flex; align-items: center; gap: 6px; height: 25px;
+        padding: 0 6px; border-radius: 5px; font-size: 12.5px; white-space: nowrap;
+      }
+      .row.active { background: var(--sel); }
+      .row .caret { width: 10px; color: var(--muted); flex: none; }
+      .foot {
+        flex: none; height: 30px; display: flex; align-items: center;
+        padding: 0 14px; font-size: 11px; color: var(--muted);
+        border-top: 1px solid var(--border);
+      }
+
+      /* ---------- editor ---------- */
+      .editor { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+      .tabs { height: 36px; flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: var(--panel); }
+      .tab {
+        display: flex; align-items: center; gap: 7px; padding: 0 12px;
+        font-size: 12.5px; color: var(--muted); border-right: 1px solid var(--border);
+      }
+      .tab.active { background: var(--bg); color: var(--fg); box-shadow: inset 0 -1px 0 var(--bg); }
+      .tab .x { color: var(--muted); font-size: 13px; margin-left: 2px; }
+      .tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+
+      .findbar {
+        height: 40px; flex: none; display: flex; align-items: center; gap: 8px;
+        padding: 0 10px; background: var(--recessed); border-bottom: 1px solid var(--border);
+      }
+      .findinput {
+        flex: 1; max-width: 340px; height: 28px; border: 1px solid var(--accent); border-radius: 6px;
+        background: var(--panel); display: flex; align-items: center; gap: 7px; padding: 0 8px; font-size: 12.5px;
+      }
+      .aa { height: 24px; min-width: 24px; padding: 0 5px; display: grid; place-items: center;
+            font-family: var(--mono); font-size: 11px; border-radius: 4px; background: #ffffff1a; color: var(--fg); }
+      .count { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+      .breadcrumb {
+        height: 30px; flex: none; display: flex; align-items: center; gap: 6px;
+        padding: 0 14px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--border);
+      }
+      .code { flex: 1; display: flex; overflow: hidden; font-family: var(--mono); font-size: 12.5px; line-height: 21px; }
+      .gutter { flex: none; width: 46px; text-align: right; padding: 10px 10px 0 0; color: #57606a; user-select: none; }
+      .lines { flex: 1; padding: 10px 0 0 14px; white-space: pre; overflow: hidden; }
+      .cl { height: 21px; white-space: pre; }
+      .hl { background: #4184e433; margin: 0 -14px 0 -14px; padding: 0 14px; }
+      .mark { background: #f2cc6080; border-radius: 2px; }
+      .mark.on { background: #f2cc60; color: #1b1f24; }
+      .kw { color: var(--kw); } .str { color: var(--str); } .fn { color: var(--fn); }
+      .num { color: var(--num); } .com { color: var(--com); } .mut { color: var(--muted); }
+      svg { display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="titlebar">
+      <svg width="17" height="17" viewBox="0 0 24 24">
+        <g fill="none" stroke="#cdd9e5" stroke-width="1.6" stroke-linejoin="round">
+          <rect x="2.5" y="3.5" width="19" height="17" rx="2.5" />
+          <path d="M9.5 3.5v17" />
+        </g>
+        <g fill="#cdd9e5">
+          <rect x="5.1" y="7.4" width="2.6" height="1.5" rx=".75" />
+          <rect x="5.1" y="11.25" width="2.6" height="1.5" rx=".75" />
+          <rect x="5.1" y="15.1" width="2.6" height="1.5" rx=".75" />
+          <rect x="11.5" y="7.4" width="7.4" height="1.5" rx=".75" />
+          <rect x="11.5" y="11.25" width="5.2" height="1.5" rx=".75" />
+          <rect x="11.5" y="15.1" width="6.6" height="1.5" rx=".75" />
+        </g>
+      </svg>
+      <span class="name">Files</span>
+    </div>
+
+    <div class="body">
+      <div class="explorer">
+        <div class="pickers">
+          <div class="select">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7d8590" stroke-width="2">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            </svg>
+            <span>acme-shop</span>
+            <svg class="chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="select">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7d8590" stroke-width="2">
+              <circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/>
+              <path d="M6 8.5v7M8.5 6H14a4 4 0 0 1 4 4v.5"/>
+            </svg>
+            <span>feature/cart</span>
+            <svg class="chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <div class="searchrow">
+          <div class="search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7d8590" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">Search in files</span>
+            <span style="margin-left:auto;display:flex;gap:2px;font-family:var(--mono);font-size:10.5px">
+              <span style="width:22px;text-align:center">Aa</span>
+              <span style="width:22px;text-align:center;text-decoration:underline;text-underline-offset:2px">ab</span>
+              <span style="width:22px;text-align:center">.*</span>
+            </span>
+          </div>
+          <div class="iconbtn" title="Go to file by name">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          </div>
+          <div class="iconbtn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </div>
+          <div class="iconbtn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+          </div>
+        </div>
+
+        <div class="tree" id="tree"></div>
+        <div class="foot">1,284 files · excluding .git, node_modules</div>
+      </div>
+
+      <div class="editor">
+        <div class="tabs">
+          <div class="tab active">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6cb6ff" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+            <span>cart.ts</span><span class="dot"></span>
+          </div>
+          <div class="tab">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7d8590" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+            <span>checkout.tsx</span><span class="x">×</span>
+          </div>
+          <div class="tab">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7d8590" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+            <span>README.md</span><span class="x">×</span>
+          </div>
+        </div>
+
+        <div class="breadcrumb">acme-shop &nbsp;›&nbsp; src &nbsp;›&nbsp; lib &nbsp;›&nbsp; <span style="color:var(--fg)">cart.ts</span>
+          <span style="margin-left:auto">TypeScript · 212 lines · 6.1 KB</span>
+          <span style="display:flex;gap:2px;padding:2px;border:1px solid var(--border);border-radius:6px;margin-left:8px">
+            <span style="padding:1px 7px;border-radius:4px;background:#ffffff14;color:var(--fg)">Read</span>
+            <span style="padding:1px 7px">Edit</span>
+          </span>
+          <svg style="margin-left:8px" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--fg)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        </div>
+        <div class="findbar">
+          <div class="findinput">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7d8590" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <span>discount</span>
+          </div>
+          <div class="aa">Aa</div>
+          <div class="count">3 of 6</div>
+          <div class="iconbtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 15l-6-6-6 6"/></svg></div>
+          <div class="iconbtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg></div>
+          <div class="iconbtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+        </div>
+
+
+        <div class="code">
+          <div class="gutter" id="gutter"></div>
+          <div class="lines" id="lines"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const folder = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7d8590" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+      const file = (c) => `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`;
+      const caretR = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M9 6l6 6-6 6"/></svg>';
+      const caretD = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M6 9l6 6 6-6"/></svg>';
+
+      const rows = [
+        [0,'dir','.github',0],[0,'dir','public',0],[0,'dir','src',1],
+        [1,'dir','components',0],[1,'dir','lib',1],
+        [2,'file','cart.ts','#6cb6ff',1],[2,'file','money.ts','#6cb6ff'],[2,'file','tax.ts','#6cb6ff'],
+        [1,'file','app.tsx','#6cb6ff'],[1,'file','main.tsx','#6cb6ff'],
+        [0,'dir','tests',0],
+        [0,'file','.env.example','#a2a9b1'],[0,'file','.gitignore','#e0823d'],
+        [0,'file','package.json','#e3b341'],[0,'file','README.md','#57ab5a'],
+        [0,'file','tsconfig.json','#e3b341'],
+      ];
+      document.getElementById('tree').innerHTML = rows.map(r => {
+        const [depth, kind, name, a, active] = r;
+        const pad = 6 + depth * 14;
+        const lead = kind === 'dir' ? (a ? caretD : caretR) : '<span style="width:10px;display:inline-block"></span>';
+        const glyph = kind === 'dir' ? folder : file(a);
+        return `<div class="row${active ? ' active' : ''}" style="padding-left:${pad}px">
+          <span class="caret">${lead}</span>${glyph}<span>${name}</span></div>`;
+      }).join('');
+
+      const src = [
+        ['com','// Applies a percentage <span class="mark">discount</span> to the cart subtotal.'],
+        ['code','<span class="kw">export function</span> <span class="fn">applyDiscount</span>('],
+        ['code','  subtotal: <span class="fn">Money</span>,'],
+        ['code','  <span class="mark">discount</span>: <span class="fn">Percent</span>,'],
+        ['code','): <span class="fn">Money</span> {'],
+        ['code','  <span class="kw">if</span> (<span class="mark on">discount</span> &lt;= <span class="num">0</span>) <span class="kw">return</span> subtotal;',1],
+        ['code','  <span class="kw">const</span> off = subtotal.<span class="fn">times</span>(<span class="mark">discount</span> / <span class="num">100</span>);'],
+        ['code','  <span class="kw">return</span> subtotal.<span class="fn">minus</span>(off).<span class="fn">clampAtZero</span>();'],
+        ['code','}'],
+        ['code',''],
+        ['com','// Line items keep their own <span class="mark">discount</span>, applied first.'],
+        ['code','<span class="kw">export function</span> <span class="fn">lineTotal</span>(item: <span class="fn">LineItem</span>): <span class="fn">Money</span> {'],
+        ['code','  <span class="kw">const</span> gross = item.unitPrice.<span class="fn">times</span>(item.quantity);'],
+        ['code','  <span class="kw">return</span> <span class="fn">applyDiscount</span>(gross, item.<span class="mark">discount</span>);'],
+        ['code','}'],
+        ['code',''],
+        ['code','<span class="kw">export const</span> <span class="fn">EMPTY_CART</span>: <span class="fn">Cart</span> = {'],
+        ['code','  items: [],'],
+        ['code','  currency: <span class="str">"USD"</span>,'],
+        ['code','};'],
+      ];
+      document.getElementById('gutter').innerHTML = src.map((_, i) => `<div class="cl">${i + 1}</div>`).join('');
+      document.getElementById('lines').innerHTML = src.map(([k, t, hl]) => {
+        const inner = k === 'com' ? `<span class="com">${t}</span>` : (t || '&nbsp;');
+        return `<div class="cl${hl ? ' hl' : ''}">${inner}</div>`;
+      }).join('');
+    </script>
+  </body>
+</html>

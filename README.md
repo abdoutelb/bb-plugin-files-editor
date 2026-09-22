@@ -1,14 +1,17 @@
 # bb-plugin-files-editor
 
 A VS Code-style file explorer and editor for the workspace behind a bb thread,
-laid out the way an editor is: a searchable file tree on the left, editor tabs
-across the top, and the whole file in the middle — syntax highlighted, with
-find in file, and editable.
+laid out the way an editor is: a file tree on the left, editor tabs across the
+top, and the whole file in the middle — syntax highlighted, editable, and
+searchable across every file in the project.
 
-![The Files panel: project and worktree pickers over a file tree, tabs, find-in-file, and the open file](https://raw.githubusercontent.com/abdoutelb/bb-plugin-files-editor/main/docs/preview.png)
+![Search in files: results grouped by file with each hit highlighted, and the file opened on the chosen line](https://raw.githubusercontent.com/abdoutelb/bb-plugin-files-editor/main/docs/preview.png)
 
-*An illustration of the layout, not a screenshot — drawn from `docs/preview.html`
-with invented project data, so no real repository or thread titles appear in it.*
+![The file tree, editor tabs, and find in the open file](https://raw.githubusercontent.com/abdoutelb/bb-plugin-files-editor/main/docs/find-in-file.png)
+
+*Illustrations of the layout, not screenshots — drawn from `docs/preview.html`
+and `docs/find-in-file.html` with invented project data, so no real repository or
+thread titles appear in them.*
 
 ## What it gives you
 
@@ -40,6 +43,54 @@ with invented project data, so no real repository or thread titles appear in it.
   *Reload* or *Overwrite* rather than clobbering the change.
 - **Images render**, other binaries say so instead of dumping bytes.
 - **`bb files`** gives an agent the same listing from the CLI.
+
+## Search in files
+
+Type in the field at the top of the tree — or press <kbd>⌘⇧F</kbd> — and the tree
+gives way to every line in the project that contains it, grouped by file with a
+hit count per file. Click a hit and the file opens on that line, highlighted a
+third of the way down so there is context above it. <kbd>Esc</kbd> brings the
+tree back. Finding a file by *name* is the magnifier beside the field
+(<kbd>⌘P</kbd>).
+
+**Smart case.** `discount` finds any case; `Discount` — with a capital — finds
+only that. `Aa` (<kbd>⌥C</kbd>) makes any query exact, `ab` (<kbd>⌥W</kbd>)
+matches whole words using Unicode word boundaries, and `.*` (<kbd>⌥R</kbd>) takes
+a regular expression.
+
+### How it stays fast
+
+There is no ripgrep to call, so the search engine is the plugin's own, and it is
+built around the fact that you refine a query while you type it:
+
+- **File contents stay in memory between searches**, checked against each file's
+  size and modification time. The first search reads the workspace from disk;
+  every search after that re-runs the pattern over text already in memory.
+- **The file list is reused while you type**, instead of walking the workspace
+  again for every keystroke.
+- **Every search cancels the one it replaces**, on the server as well as in the
+  view, so a fast typist never queues a backlog.
+- **Files are read in parallel**, binaries are skipped by extension before they
+  are opened and by content after, and anything over 2 MB is left out.
+- **It stops early.** A very common word stops at 2,000 hits rather than
+  scanning the rest of the project for results nobody will scroll to.
+
+Measured on a 6,176-file Laravel project:
+
+| search | time on the server |
+|---|---|
+| first search after the plugin loads | ~600 ms |
+| the same search again | **~65 ms** |
+| refining `discount` → `discount_percentage` | ~62 ms |
+| a regular expression | ~107 ms |
+| a very common word, stopping at the cap | ~8 ms |
+
+**A regex cannot freeze BB.** This plugin runs inside BB's own server process.
+A pattern that backtracks catastrophically — `(a+)+$` against a long run of `a`s —
+would block that process for minutes. So a regex runs in its own worker thread
+with a 3-second deadline, and one that overruns is stopped and reported as too
+slow. Plain-text and whole-word searches are escaped before they run, which
+makes them linear, so they stay on the fast path.
 
 ## Dotfiles
 
