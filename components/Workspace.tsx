@@ -216,10 +216,14 @@ export function Workspace({
   const openMatch = useCallback(
     (path: string, line: number) => {
       openFile(path);
+      // A markdown tab opens in Preview, which renders the document and has no
+      // lines to scroll to. A search hit names a line, so show the source —
+      // the same reason ⌘F flips a preview tab to Read.
+      if (isMarkdownPath(path)) tabs.setMode(path, "read");
       revealNonce.current += 1;
       setReveal({ path, line, nonce: revealNonce.current });
     },
-    [openFile],
+    [openFile, tabs],
   );
 
   const closeTab = useCallback(

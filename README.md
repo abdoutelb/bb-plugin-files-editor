@@ -172,7 +172,8 @@ previewable markdown. `server.ts` is mostly wiring; the components are the view.
 - Reading, a find hit highlights its whole line, because line ranges are what
   BB's source viewer accepts. Editing selects the exact match. Previewing there
   is nothing to highlight — the offsets point into the markdown source, not into
-  what is on screen — so <kbd>⌘F</kbd> switches the pane to *Read* first.
+  what is on screen — so <kbd>⌘F</kbd> switches the pane to *Read* first, and a
+  search hit in a markdown file opens it in *Read* on that line.
 - *Preview* is BB's chat-message renderer, which knows nothing about where the
   file lives, so relative image and link paths do not resolve against the
   workspace. What it makes of raw HTML is its own business, not this plugin's.
