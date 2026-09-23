@@ -144,10 +144,10 @@ function TextFileView({
 
   // Find reads the file's text: its offsets index the markdown source, and it
   // reveals a hit through the source viewer's line highlight. The rendered pane
-  // has neither, so the bar would count matches it cannot show. ⌘F switches a
-  // preview tab to Read; this covers the other way in — switching to a preview
-  // tab while the bar is already open.
-  const isFindOpen = findRequest > 0 && tab.mode !== "preview";
+  // has neither, so there is never a request while a tab is in Preview: ⌘F
+  // switches the tab to Read first, and the workspace ends the session when a
+  // tab enters Preview.
+  const isFindOpen = findRequest > 0;
 
   // Each file gets its own find session. Without this, switching tabs would
   // leave the previous file's query counting matches in the new one.
@@ -205,6 +205,7 @@ function TextFileView({
   // touches it.
   const viewRef = useRef<HTMLDivElement | null>(null);
   const seenPathRef = useRef<string | null>(null);
+  const seenModeRef = useRef<FileTab["mode"] | null>(null);
   const targetLine = revealLine?.line ?? null;
   const lineCount = useMemo(() => {
     let count = 1;
@@ -217,7 +218,9 @@ function TextFileView({
     // Recorded before the mode check, so a tab that spent its first renders in
     // preview still counts as seen once it flips to read.
     const isSameFile = seenPathRef.current === tab.path;
+    const previousMode = seenModeRef.current;
     seenPathRef.current = tab.path;
+    seenModeRef.current = tab.mode;
     // Only the read branch mounts the viewer this reaches for. In preview the
     // query below would find nothing and reschedule itself every frame for as
     // long as the tab stays open.
@@ -229,7 +232,9 @@ function TextFileView({
     // different matter — the previous tab's query survives into its first
     // render, and a hit belonging to a file the reader just left must not cost
     // this one the top it is supposed to open at.
-    if (isSameFile && active !== undefined) return;
+    //
+    // Only from Preview. Edit to Read with the bar open pins as it always has.
+    if (isSameFile && previousMode === "preview" && active !== undefined) return;
     const root = viewRef.current;
     if (root === null) return;
 
@@ -362,7 +367,15 @@ function TextFileView({
         // Keyed: this div is the scrollport, and React would otherwise reuse
         // the node across a tab switch, opening the next document at the
         // scroll offset of the last one.
-        <div key={tab.path} className="min-h-0 flex-1 overflow-auto">
+        // Focusable and named, like the editor: PageDown scrolls it without a
+        // click first, and a screen reader can tell the panes apart.
+        <div
+          key={tab.path}
+          tabIndex={0}
+          role="region"
+          aria-label={`Preview of ${tab.path}`}
+          className="min-h-0 flex-1 overflow-auto focus-visible:outline-none"
+        >
           <div className="mx-auto w-full max-w-[52rem] p-5">
             <Markdown content={content} />
           </div>

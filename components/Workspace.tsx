@@ -309,10 +309,12 @@ export function Workspace({
     setFindRequest((current) => current + 1);
   };
 
-  // The nonce says find was asked for; this says the bar is actually showing.
-  // They part company on a preview tab — switching to one with the bar open
-  // leaves the nonce set — and the button and the Escape key follow the bar.
-  const isFindShowing = findRequest > 0 && activeTab?.mode !== "preview";
+  // Find has no bar over a rendered pane, so a tab that enters Preview — from
+  // the segment, by activating it, or by closing the tab in front of it — ends
+  // the find session rather than hiding it. Set during render, not in an
+  // effect, so the pane never draws a bar for the frame in between.
+  if (findRequest > 0 && activeTab?.mode === "preview") setFindRequest(0);
+  const isFindShowing = findRequest > 0;
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const isAccel = event.metaKey || event.ctrlKey;
@@ -509,9 +511,8 @@ export function Workspace({
                   canPreview={canPreviewMarkdown(
                     activeTab.path,
                     // What Preview renders is the draft where there is one, and
-                    // a draft can outgrow the file it came from. Code units are
-                    // a floor on bytes, and cheap enough to take per keystroke.
-                    activeTab.draft?.length ?? activeTab.file.sizeBytes,
+                    // a draft can outgrow the file it came from.
+                    activeTab.draft ?? activeTab.file.content,
                   )}
                   canEdit={activeTab.file.editable}
                   onChange={(next) => tabs.setMode(activeTab.path, next)}

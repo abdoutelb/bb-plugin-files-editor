@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { languageLabel } from "./file-kind.js";
 import {
-  MARKDOWN_PREVIEW_MAX_BYTES,
+  MARKDOWN_PREVIEW_MAX_CHARS,
+  allowedMode,
   canPreviewMarkdown,
   isMarkdownPath,
 } from "./markdown.js";
@@ -37,13 +39,61 @@ describe("isMarkdownPath", () => {
 });
 
 describe("canPreviewMarkdown", () => {
-  it("renders a file at the cap, and falls back one byte over it", () => {
-    const cap = MARKDOWN_PREVIEW_MAX_BYTES;
-    expect(canPreviewMarkdown("README.md", cap)).toBe(true);
-    expect(canPreviewMarkdown("README.md", cap + 1)).toBe(false);
+  it("renders a document at the cap, and falls back one character over it", () => {
+    const cap = MARKDOWN_PREVIEW_MAX_CHARS;
+    expect(canPreviewMarkdown("README.md", "a".repeat(cap))).toBe(true);
+    expect(canPreviewMarkdown("README.md", "a".repeat(cap + 1))).toBe(false);
+  });
+
+  it("counts characters, so text that is large in UTF-8 is not refused for it", () => {
+    // Three UTF-8 bytes a character: about 2.4 MB on disk, well under the cap.
+    const chinese = "文".repeat(800_000);
+    expect(canPreviewMarkdown("README.md", chinese)).toBe(true);
   });
 
   it("stays false for a small file that is not markdown", () => {
-    expect(canPreviewMarkdown("lib/find.ts", 120)).toBe(false);
+    expect(canPreviewMarkdown("lib/find.ts", "export {};")).toBe(false);
+  });
+});
+
+describe("allowedMode", () => {
+  const small = "# Title\n\nBody.";
+  const huge = "a".repeat(MARKDOWN_PREVIEW_MAX_CHARS + 1);
+
+  it("keeps Preview for markdown small enough to render", () => {
+    expect(allowedMode("preview", "README.md", small)).toBe("preview");
+  });
+
+  it("falls back to Read for markdown over the cap", () => {
+    expect(allowedMode("preview", "README.md", huge)).toBe("read");
+  });
+
+  it("never lets a file that is not markdown into Preview", () => {
+    expect(allowedMode("preview", "server.ts", small)).toBe("read");
+  });
+
+  it("falls back to Read when there is no text to render", () => {
+    expect(allowedMode("preview", "README.md", null)).toBe("read");
+  });
+
+  it("passes Read and Edit through, whatever the file", () => {
+    expect(allowedMode("read", "README.md", huge)).toBe("read");
+    expect(allowedMode("edit", "server.ts", null)).toBe("edit");
+  });
+
+  it("gives a draft and a file of the same text the same answer", () => {
+    // The unit bug this replaces: bytes for the file, characters for the draft.
+    const arabic = "ع".repeat(700_000); // 1.4 MB in UTF-8, 700k characters
+    expect(allowedMode("preview", "README.md", arabic)).toBe("preview");
+    expect(allowedMode("preview", "README.md", `${arabic}!`)).toBe("preview");
+  });
+});
+
+describe("the markdown list and the language table", () => {
+  it("agree: every previewable extension is labelled Markdown", () => {
+    for (const path of ["README.md", "guide.markdown", "NOTES.MD"]) {
+      expect(isMarkdownPath(path)).toBe(true);
+      expect(languageLabel(path)).toBe("Markdown");
+    }
   });
 });

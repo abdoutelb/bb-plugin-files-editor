@@ -187,6 +187,7 @@ previewable markdown. `server.ts` is mostly wiring; the components are the view.
 - On a connected machine, search goes through BB's file API one file at a time:
   it covers the first 3,000 files, keeps them for a minute, and cannot see
   dotfiles.
-- Files over 4 MB open read-only, and markdown over 1 MB opens as source —
-  rendering is one pass over the whole document, with nothing virtualized.
+- Files over 4 MB open read-only, and markdown over a million characters opens
+  as source — rendering is one pass over the whole document, with nothing
+  virtualized.
 - The tree does not create, rename, or delete files.

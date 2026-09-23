@@ -17,22 +17,41 @@ export function isMarkdownPath(path: string): boolean {
   return MARKDOWN_EXTENSIONS.has(extensionOf(path));
 }
 
+/** What the pane shows: rendered markdown, BB's source viewer, or an editor. */
+export type FileViewMode = "preview" | "read" | "edit";
+
 /**
  * BB's markdown renderer is its chat message renderer: it parses the whole
  * document and builds the entire element tree in one synchronous pass, with no
  * virtualization — unlike the source viewer, which measures and settles over
- * several frames. A long README is tens of kilobytes, so a megabyte already
- * allows an order of magnitude more than anything written to be read; past it
- * the parse blocks the surface for long enough to look like a hang.
+ * several frames. A long README is tens of kilobytes, so a million characters
+ * already allows an order of magnitude more than anything written to be read;
+ * past it the parse blocks the surface for long enough to look like a hang.
+ *
+ * Counted in characters (`text.length`), not bytes. The parse costs what the
+ * text costs, whatever its encoding on disk, and every caller has the text in
+ * hand: the file as read, the file as written, and the draft being typed. One
+ * unit for all three is what keeps a document from being refused on load,
+ * allowed after a keystroke, and refused again on save.
  */
-export const MARKDOWN_PREVIEW_MAX_BYTES = 1024 * 1024;
+export const MARKDOWN_PREVIEW_MAX_CHARS = 1024 * 1024;
+
+/** Whether `text`, as the contents of `path`, is rendered in Preview. */
+export function canPreviewMarkdown(path: string, text: string): boolean {
+  return isMarkdownPath(path) && text.length <= MARKDOWN_PREVIEW_MAX_CHARS;
+}
 
 /**
- * `sizeBytes` is the best measure the caller has of what would be rendered: the
- * UTF-8 size the read reports, or, for a draft not yet written, its length in
- * UTF-16 units — a floor on that size, and cheap enough to take per keystroke.
- * The cap is a guard against a hang, not an accountant.
+ * The mode a tab may hold, given the one asked for. `text` is what the tab
+ * would render — the draft over the file — or null when it has no text: not
+ * read yet, an image, a binary. Preview is the only mode with a precondition,
+ * and a tab that fails it shows the source instead.
  */
-export function canPreviewMarkdown(path: string, sizeBytes: number): boolean {
-  return isMarkdownPath(path) && sizeBytes <= MARKDOWN_PREVIEW_MAX_BYTES;
+export function allowedMode(
+  requested: FileViewMode,
+  path: string,
+  text: string | null,
+): FileViewMode {
+  if (requested !== "preview") return requested;
+  return text !== null && canPreviewMarkdown(path, text) ? "preview" : "read";
 }
