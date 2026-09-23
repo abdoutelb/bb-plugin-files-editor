@@ -48,9 +48,14 @@ export interface FileTab {
 }
 
 /** What the tab would render: the draft over the file, or null with no text. */
-function renderedText(tab: FileTab): string | null {
+export function renderedText(tab: FileTab): string | null {
   if (tab.draft !== null) return tab.draft;
   return tab.file !== null && tab.file.kind === "text" ? tab.file.content : null;
+}
+
+/** Whether the tab may be shown in Preview — the rule `setMode` applies. */
+export function canPreview(tab: FileTab): boolean {
+  return allowedMode("preview", tab.path, renderedText(tab)) === "preview";
 }
 
 export function isDirty(tab: FileTab): boolean {
@@ -73,6 +78,12 @@ export interface FileTabsApi {
   activate(path: string): void;
   setDraft(path: string, draft: string): void;
   setMode(path: string, mode: FileViewMode): void;
+  /**
+   * Leaves Preview for Read, and leaves Read and Edit alone. For features that
+   * address the source by line or offset — find, a search hit — which the
+   * rendered pane cannot show.
+   */
+  showSource(path: string): void;
   save(): void;
   overwrite(): void;
   reload(path?: string): void;
@@ -285,8 +296,7 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
             patch(path, (current) => ({ ...current, save: { kind: "conflict" } }));
             return;
           }
-          patch(path, (current) => {
-            const next: FileTab = {
+          patch(path, (current) => ({
             ...current,
             save: { kind: "clean" },
             sha256: result.sha256,
@@ -302,12 +312,7 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
                     sizeBytes: result.sizeBytes,
                   }
                 : current.file,
-            };
-            // The same fallback `load` applies, for the other way a tab's text
-            // changes: writing past the cap would otherwise leave the segment
-            // disabled while the pane it selects keeps rendering.
-            return { ...next, mode: allowedMode(next.mode, path, renderedText(next)) };
-          });
+          }));
         })
         .catch((error: unknown) => {
           if (!isCurrent()) return;
@@ -342,6 +347,11 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
         patch(path, (tab) => ({ ...tab, mode: allowedMode(mode, path, renderedText(tab)) })),
       [patch],
     ),
+    showSource: useCallback(
+      (path) =>
+        patch(path, (tab) => (tab.mode === "preview" ? { ...tab, mode: "read" } : tab)),
+      [patch],
+    ),
     save: useCallback(() => {
       const path = activePathRef.current;
       const tab = tabsRef.current.find((candidate) => candidate.path === path);
@@ -354,7 +364,12 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
       (path?: string) => {
         const target = path ?? activePathRef.current;
         if (target === null) return;
-        patch(target, (tab) => ({ ...tab, draft: null, save: { kind: "clean" } }));
+        patch(target, (tab) => {
+          // Dropping the draft puts the file's own text back in the pane, and
+          // that can be over the cap the draft was under.
+          const next: FileTab = { ...tab, draft: null, save: { kind: "clean" } };
+          return { ...next, mode: allowedMode(next.mode, target, renderedText(next)) };
+        });
         load(target);
       },
       [load, patch],

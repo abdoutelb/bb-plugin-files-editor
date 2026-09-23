@@ -10,7 +10,7 @@ import { cn, formatHomePathForDisplay } from "@/lib/utils";
 import type { FlatEntry } from "@/lib/tree";
 import type { ScopeRef } from "@/lib/route";
 import { sameScope } from "@/lib/route";
-import { canPreviewMarkdown, isMarkdownPath } from "@/lib/markdown";
+import { isMarkdownPath } from "@/lib/markdown";
 import type { ResolvedScope, rpcContract } from "../server.js";
 import { Explorer } from "./Explorer";
 import { EditorTabs } from "./EditorTabs";
@@ -18,6 +18,7 @@ import { FileView, fileMetaLabel } from "./FileView";
 import { QuickOpen } from "./QuickOpen";
 import { WorkspacePicker } from "./WorkspacePicker";
 import {
+  canPreview,
   isDirty,
   useFileTabs,
   type FileTab,
@@ -219,7 +220,7 @@ export function Workspace({
       // A markdown tab opens in Preview, which renders the document and has no
       // lines to scroll to. A search hit names a line, so show the source —
       // the same reason ⌘F flips a preview tab to Read.
-      if (isMarkdownPath(path)) tabs.setMode(path, "read");
+      tabs.showSource(path);
       revealNonce.current += 1;
       setReveal({ path, line, nonce: revealNonce.current });
     },
@@ -305,7 +306,7 @@ export function Workspace({
   // the source it is about to search.
   const openFind = () => {
     if (activeTab === null) return;
-    if (activeTab.mode === "preview") tabs.setMode(activeTab.path, "read");
+    tabs.showSource(activeTab.path);
     setFindRequest((current) => current + 1);
   };
 
@@ -508,12 +509,7 @@ export function Workspace({
                 <ModeToggle
                   mode={activeTab.mode}
                   isMarkdown={isMarkdownPath(activeTab.path)}
-                  canPreview={canPreviewMarkdown(
-                    activeTab.path,
-                    // What Preview renders is the draft where there is one, and
-                    // a draft can outgrow the file it came from.
-                    activeTab.draft ?? activeTab.file.content,
-                  )}
+                  canPreview={canPreview(activeTab)}
                   canEdit={activeTab.file.editable}
                   onChange={(next) => tabs.setMode(activeTab.path, next)}
                 />

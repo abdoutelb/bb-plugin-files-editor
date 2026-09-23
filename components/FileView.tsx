@@ -225,16 +225,17 @@ function TextFileView({
     // query below would find nothing and reschedule itself every frame for as
     // long as the tab stays open.
     if (tab.mode !== "read") return;
-    // Flipping THIS file to read with a hit already selected is what ⌘F on a
-    // preview tab produces: the reveal and the pin land in the same commit, and
-    // the top, re-pinned on every resize for the next 1500ms, would win.
-    // Whoever asked for the hit asked for the scroll. Another file is a
-    // different matter — the previous tab's query survives into its first
-    // render, and a hit belonging to a file the reader just left must not cost
-    // this one the top it is supposed to open at.
-    //
-    // Only from Preview. Edit to Read with the bar open pins as it always has.
-    if (isSameFile && previousMode === "preview" && active !== undefined) return;
+    // Flipping THIS file from preview to read with find open is what ⌘F on a
+    // preview tab produces. The viewer mounts fresh, scrolled to the end, so
+    // something has to place it — at the hit find is about to select (the one
+    // at the caret, which is where the index effect lands), not at the top.
+    // Only from preview, and only this file: another file's first render still
+    // carries the previous tab's query, and Edit to Read pins as it always has.
+    const findLine =
+      isSameFile && previousMode === "preview" && isFindOpen
+        ? matches[matchIndexAt(matches, caretRef.current)]?.line ?? null
+        : null;
+    const placeLine = targetLine ?? findLine;
     const root = viewRef.current;
     if (root === null) return;
 
@@ -252,7 +253,7 @@ function TextFileView({
       }
 
       const place = () => {
-        if (targetLine === null) {
+        if (placeLine === null) {
           port.scrollTop = 0;
           return;
         }
@@ -260,7 +261,7 @@ function TextFileView({
         // height and the content height divides evenly by the line count.
         const lineHeight = port.scrollHeight / lineCount;
         // A third of the way down, so the hit has context above it.
-        port.scrollTop = Math.max(0, (targetLine - 1) * lineHeight - port.clientHeight / 3);
+        port.scrollTop = Math.max(0, (placeLine - 1) * lineHeight - port.clientHeight / 3);
       };
       place();
 
@@ -290,9 +291,10 @@ function TextFileView({
       window.clearTimeout(timer);
       observer?.disconnect();
     };
-    // `active` is read but not depended on: stepping to the next hit must not
-    // re-run this and pin a file the reader is already moving around in. The
-    // reveal nonce IS depended on: opening the same search hit again re-places.
+    // `matches` is read but not depended on: typing in the find bar or stepping
+    // to the next hit must not re-run this and pin a file the reader is already
+    // moving around in. The reveal nonce IS depended on: opening the same search
+    // hit again re-places.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.path, tab.mode, targetLine, revealLine?.nonce]);
 
@@ -317,6 +319,13 @@ function TextFileView({
     // Keyed on the nonce: re-running on every keystroke would yank the caret.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealLine?.nonce, tab.mode]);
+
+  // Rendering is one synchronous parse of the whole document, so it runs when
+  // the text changes, not on every render the workspace around it causes.
+  const markdown = useMemo(
+    () => (tab.mode === "preview" ? <Markdown content={content} /> : null),
+    [content, tab.mode],
+  );
 
   // A find hit wins while the find bar is in use; otherwise the search hit.
   const highlighted =
@@ -377,7 +386,7 @@ function TextFileView({
           className="min-h-0 flex-1 overflow-auto focus-visible:outline-none"
         >
           <div className="mx-auto w-full max-w-[52rem] p-5">
-            <Markdown content={content} />
+            {markdown}
           </div>
         </div>
       ) : (

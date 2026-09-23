@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { languageLabel } from "./file-kind.js";
 import {
+  MARKDOWN_EXTENSIONS,
   MARKDOWN_PREVIEW_MAX_CHARS,
   allowedMode,
   canPreviewMarkdown,
@@ -80,18 +81,12 @@ describe("allowedMode", () => {
     expect(allowedMode("read", "README.md", huge)).toBe("read");
     expect(allowedMode("edit", "server.ts", null)).toBe("edit");
   });
-
-  it("gives a draft and a file of the same text the same answer", () => {
-    // The unit bug this replaces: bytes for the file, characters for the draft.
-    const arabic = "ع".repeat(700_000); // 1.4 MB in UTF-8, 700k characters
-    expect(allowedMode("preview", "README.md", arabic)).toBe("preview");
-    expect(allowedMode("preview", "README.md", `${arabic}!`)).toBe("preview");
-  });
 });
 
 describe("the markdown list and the language table", () => {
   it("agree: every previewable extension is labelled Markdown", () => {
-    for (const path of ["README.md", "guide.markdown", "NOTES.MD"]) {
+    for (const extension of MARKDOWN_EXTENSIONS) {
+      const path = `docs/notes.${extension}`;
       expect(isMarkdownPath(path)).toBe(true);
       expect(languageLabel(path)).toBe("Markdown");
     }

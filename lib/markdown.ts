@@ -6,7 +6,7 @@
 
 import { extensionOf } from "./file-kind.js";
 
-const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
+export const MARKDOWN_EXTENSIONS: ReadonlySet<string> = new Set(["md", "markdown"]);
 
 /**
  * `.mdx` is deliberately absent. It is JSX wearing markdown's extension, and a
