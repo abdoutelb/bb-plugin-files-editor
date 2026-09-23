@@ -366,9 +366,12 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
         if (target === null) return;
         patch(target, (tab) => {
           // Dropping the draft puts the file's own text back in the pane, and
-          // that can be over the cap the draft was under.
+          // that can be over the cap the draft was under. A tab with no text
+          // yet — its first read still in flight — has nothing to measure, and
+          // `load` settles its mode when the text lands.
           const next: FileTab = { ...tab, draft: null, save: { kind: "clean" } };
-          return { ...next, mode: allowedMode(next.mode, target, renderedText(next)) };
+          const text = renderedText(next);
+          return text === null ? next : { ...next, mode: allowedMode(next.mode, target, text) };
         });
         load(target);
       },

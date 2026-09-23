@@ -173,7 +173,8 @@ previewable markdown. `server.ts` is mostly wiring; the components are the view.
   BB's source viewer accepts. Editing selects the exact match. Previewing there
   is nothing to highlight — the offsets point into the markdown source, not into
   what is on screen — so <kbd>⌘F</kbd> switches the pane to *Read* first, and a
-  search hit in a markdown file opens it in *Read* on that line.
+  search hit in a markdown file opens it in *Read* on that line, unless you are
+  editing it.
 - *Preview* is BB's chat-message renderer, which knows nothing about where the
   file lives, so relative image and link paths do not resolve against the
   workspace. What it makes of raw HTML is its own business, not this plugin's.
@@ -187,7 +188,7 @@ previewable markdown. `server.ts` is mostly wiring; the components are the view.
 - On a connected machine, search goes through BB's file API one file at a time:
   it covers the first 3,000 files, keeps them for a minute, and cannot see
   dotfiles.
-- Files over 4 MB open read-only, and markdown over a million characters opens
+- Files over 4 MB open read-only, and markdown over 1,048,576 characters opens
   as source — rendering is one pass over the whole document, with nothing
   virtualized.
 - The tree does not create, rename, or delete files.

@@ -383,7 +383,7 @@ function TextFileView({
           tabIndex={0}
           role="region"
           aria-label={`Preview of ${tab.path}`}
-          className="min-h-0 flex-1 overflow-auto focus-visible:outline-none"
+          className="min-h-0 flex-1 overflow-auto focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
         >
           <div className="mx-auto w-full max-w-[52rem] p-5">
             {markdown}
