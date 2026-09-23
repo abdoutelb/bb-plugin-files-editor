@@ -10,13 +10,20 @@ import { cn, formatHomePathForDisplay } from "@/lib/utils";
 import type { FlatEntry } from "@/lib/tree";
 import type { ScopeRef } from "@/lib/route";
 import { sameScope } from "@/lib/route";
+import { isMarkdownPath } from "@/lib/markdown";
 import type { ResolvedScope, rpcContract } from "../server.js";
 import { Explorer } from "./Explorer";
 import { EditorTabs } from "./EditorTabs";
 import { FileView, fileMetaLabel } from "./FileView";
 import { QuickOpen } from "./QuickOpen";
 import { WorkspacePicker } from "./WorkspacePicker";
-import { isDirty, useFileTabs, type FileTab } from "./use-file-tabs";
+import {
+  canPreview,
+  isDirty,
+  useFileTabs,
+  type FileTab,
+  type FileViewMode,
+} from "./use-file-tabs";
 
 interface TreeState {
   status: "idle" | "loading" | "ready" | "error";
@@ -210,10 +217,14 @@ export function Workspace({
   const openMatch = useCallback(
     (path: string, line: number) => {
       openFile(path);
+      // A markdown tab opens in Preview, which renders the document and has no
+      // lines to scroll to. A search hit names a line, so show the source —
+      // the same reason ⌘F flips a preview tab to Read.
+      tabs.showSource(path);
       revealNonce.current += 1;
       setReveal({ path, line, nonce: revealNonce.current });
     },
-    [openFile],
+    [openFile, tabs],
   );
 
   const closeTab = useCallback(
@@ -289,6 +300,23 @@ export function Workspace({
   const activeTab = tabs.activeTab;
   const resolved = tree.scope;
 
+  // Find searches the file's text, and reveals a hit by highlighting its line
+  // in the source viewer — the rendered pane has no lines and its text is not
+  // the text being searched. So opening find on a preview tab first shows it
+  // the source it is about to search.
+  const openFind = () => {
+    if (activeTab === null) return;
+    tabs.showSource(activeTab.path);
+    setFindRequest((current) => current + 1);
+  };
+
+  // Find has no bar over a rendered pane, so a tab that enters Preview — from
+  // the segment, by activating it, or by closing the tab in front of it — ends
+  // the find session rather than hiding it. Set during render, not in an
+  // effect, so the pane never draws a bar for the frame in between.
+  if (findRequest > 0 && activeTab?.mode === "preview") setFindRequest(0);
+  const isFindShowing = findRequest > 0;
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const isAccel = event.metaKey || event.ctrlKey;
     if (isAccel && event.key.toLowerCase() === "p" && !event.shiftKey) {
@@ -306,7 +334,7 @@ export function Workspace({
       // Claims the browser's own find, which cannot see a virtualized tree or
       // the textarea's unrendered lines anyway.
       event.preventDefault();
-      if (activeTab?.file?.kind === "text") setFindRequest((n) => n + 1);
+      if (activeTab?.file?.kind === "text") openFind();
       return;
     }
     if (isAccel && event.key.toLowerCase() === "s") {
@@ -325,7 +353,7 @@ export function Workspace({
       setIsQuickOpen(false);
       return;
     }
-    if (event.key === "Escape" && findRequest > 0) {
+    if (event.key === "Escape" && isFindShowing) {
       event.preventDefault();
       setFindRequest(0);
     }
@@ -479,16 +507,18 @@ export function Workspace({
                   {fileMetaLabel(activeTab)}
                 </span>
                 <ModeToggle
-                  isEditing={activeTab.isEditing}
+                  mode={activeTab.mode}
+                  isMarkdown={isMarkdownPath(activeTab.path)}
+                  canPreview={canPreview(activeTab)}
                   canEdit={activeTab.file.editable}
-                  onChange={(next) => tabs.setEditing(activeTab.path, next)}
+                  onChange={(next) => tabs.setMode(activeTab.path, next)}
                 />
                 <ToolbarButton
                   icon="Search"
                   label="Find in file (⌘F)"
-                  isActive={findRequest > 0}
+                  isActive={isFindShowing}
                   onClick={() =>
-                    setFindRequest((current) => (current > 0 ? 0 : current + 1))
+                    isFindShowing ? setFindRequest(0) : openFind()
                   }
                 />
                 <ToolbarButton
@@ -681,18 +711,23 @@ function EmptyEditor({
 }
 
 /**
- * Read / Edit as two labelled segments rather than one icon that swaps meaning.
- * An icon-only toggle has to be read twice — once for the glyph, once to work
- * out whether it shows the current mode or the one it switches to.
+ * Preview / Read / Edit as labelled segments rather than one icon that swaps
+ * meaning. An icon-only toggle has to be read twice — once for the glyph, once
+ * to work out whether it shows the current mode or the one it switches to.
  */
 function ModeToggle({
-  isEditing,
+  mode,
+  isMarkdown,
+  canPreview,
   canEdit,
   onChange,
 }: {
-  isEditing: boolean;
+  mode: FileViewMode;
+  /** Only markdown has a rendered form; every other file gets two segments. */
+  isMarkdown: boolean;
+  canPreview: boolean;
   canEdit: boolean;
-  onChange: (isEditing: boolean) => void;
+  onChange: (mode: FileViewMode) => void;
 }) {
   return (
     <div
@@ -700,20 +735,32 @@ function ModeToggle({
       aria-label="File mode"
       className="flex shrink-0 items-center gap-0.5 rounded-md border border-border p-0.5"
     >
+      {isMarkdown ? (
+        <ModeSegment
+          icon="FileText"
+          label="Preview"
+          isSelected={mode === "preview"}
+          // Rendering is one synchronous pass over the whole document, so a
+          // huge one would freeze the surface; the segment says why it is off.
+          isDisabled={!canPreview}
+          title={canPreview ? undefined : "This file is too large to preview"}
+          onClick={() => onChange("preview")}
+        />
+      ) : null}
       <ModeSegment
         icon="Eye"
         label="Read"
-        isSelected={!isEditing}
-        onClick={() => onChange(false)}
+        isSelected={mode === "read"}
+        onClick={() => onChange("read")}
       />
       <ModeSegment
         icon="Edit"
         label="Edit"
-        isSelected={isEditing}
+        isSelected={mode === "edit"}
         // A file too large to edit stays readable; the segment says why.
-        isDisabled={!canEdit && !isEditing}
+        isDisabled={!canEdit && mode !== "edit"}
         title={canEdit ? undefined : "This file is too large to edit"}
-        onClick={() => onChange(true)}
+        onClick={() => onChange("edit")}
       />
     </div>
   );

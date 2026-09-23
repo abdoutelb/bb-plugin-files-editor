@@ -3,6 +3,7 @@ import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../server.js";
 import type { ScopeRef } from "@/lib/route";
 import { sameScope } from "@/lib/route";
+import { allowedMode, isMarkdownPath, type FileViewMode } from "@/lib/markdown";
 
 export type FileContent =
   | {
@@ -26,6 +27,8 @@ export type FileContent =
       reason: string;
     };
 
+export type { FileViewMode };
+
 export type SaveState =
   | { kind: "clean" }
   | { kind: "saving" }
@@ -40,8 +43,19 @@ export interface FileTab {
   draft: string | null;
   /** The hash the draft is based on — the compare-and-swap guard on save. */
   sha256: string | null;
-  isEditing: boolean;
+  mode: FileViewMode;
   save: SaveState;
+}
+
+/** What the tab would render: the draft over the file, or null with no text. */
+export function renderedText(tab: FileTab): string | null {
+  if (tab.draft !== null) return tab.draft;
+  return tab.file !== null && tab.file.kind === "text" ? tab.file.content : null;
+}
+
+/** Whether the tab may be shown in Preview — the rule `setMode` applies. */
+export function canPreview(tab: FileTab): boolean {
+  return allowedMode("preview", tab.path, renderedText(tab)) === "preview";
 }
 
 export function isDirty(tab: FileTab): boolean {
@@ -63,7 +77,13 @@ export interface FileTabsApi {
   closeAll(): void;
   activate(path: string): void;
   setDraft(path: string, draft: string): void;
-  setEditing(path: string, isEditing: boolean): void;
+  setMode(path: string, mode: FileViewMode): void;
+  /**
+   * Leaves Preview for Read, and leaves Read and Edit alone. For features that
+   * address the source by line or offset — find, a search hit — which the
+   * rendered pane cannot show.
+   */
+  showSource(path: string): void;
   save(): void;
   overwrite(): void;
   reload(path?: string): void;
@@ -140,6 +160,14 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
             error: null,
             draft: null,
             sha256: file.kind === "text" ? file.sha256 : null,
+            // A tab opens in preview off its name alone. This is the first
+            // moment its size is known, and a document too large to render has
+            // to fall back to source rather than freeze the surface.
+            mode: allowedMode(
+              tab.mode,
+              path,
+              file.kind === "text" ? file.content : null,
+            ),
             save: { kind: "clean" },
           }));
         })
@@ -168,7 +196,10 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
         error: null,
         draft: null,
         sha256: null,
-        isEditing: false,
+        // The read has not been issued yet, so the path is all there is to go
+        // on: markdown is worth reading rendered, everything else is source.
+        // Whether the file is small enough to render is settled in `load`.
+        mode: isMarkdownPath(path) ? "preview" : "read",
         save: { kind: "clean" },
       };
       setTabs((current) => {
@@ -309,8 +340,16 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
       (path, draft) => patch(path, (tab) => ({ ...tab, draft })),
       [patch],
     ),
-    setEditing: useCallback(
-      (path, isEditing) => patch(path, (tab) => ({ ...tab, isEditing })),
+    setMode: useCallback(
+      // The toolbar disables what a tab cannot hold, but the rule lives here,
+      // so no caller can put a `.ts` tab or an oversized document in Preview.
+      (path, mode) =>
+        patch(path, (tab) => ({ ...tab, mode: allowedMode(mode, path, renderedText(tab)) })),
+      [patch],
+    ),
+    showSource: useCallback(
+      (path) =>
+        patch(path, (tab) => (tab.mode === "preview" ? { ...tab, mode: "read" } : tab)),
       [patch],
     ),
     save: useCallback(() => {
@@ -325,7 +364,15 @@ export function useFileTabs(scope: ScopeRef | null): FileTabsApi {
       (path?: string) => {
         const target = path ?? activePathRef.current;
         if (target === null) return;
-        patch(target, (tab) => ({ ...tab, draft: null, save: { kind: "clean" } }));
+        patch(target, (tab) => {
+          // Dropping the draft puts the file's own text back in the pane, and
+          // that can be over the cap the draft was under. A tab with no text
+          // yet — its first read still in flight — has nothing to measure, and
+          // `load` settles its mode when the text lands.
+          const next: FileTab = { ...tab, draft: null, save: { kind: "clean" } };
+          const text = renderedText(next);
+          return text === null ? next : { ...next, mode: allowedMode(next.mode, target, text) };
+        });
         load(target);
       },
       [load, patch],

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { experimental_SourceCode as SourceCode } from "@get-bb/plugin-sdk/app";
+import {
+  Markdown,
+  experimental_SourceCode as SourceCode,
+} from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { formatBytes, languageLabel } from "@/lib/file-kind";
@@ -139,6 +142,11 @@ function TextFileView({
   const caretRef = useRef(0);
   const nonceRef = useRef(0);
 
+  // Find reads the file's text: its offsets index the markdown source, and it
+  // reveals a hit through the source viewer's line highlight. The rendered pane
+  // has neither, so there is never a request while a tab is in Preview: ⌘F
+  // switches the tab to Read first, and the workspace ends the session when a
+  // tab enters Preview.
   const isFindOpen = findRequest > 0;
 
   // Each file gets its own find session. Without this, switching tabs would
@@ -196,6 +204,8 @@ function TextFileView({
   // while the content is still growing, and lets go the moment the reader
   // touches it.
   const viewRef = useRef<HTMLDivElement | null>(null);
+  const seenPathRef = useRef<string | null>(null);
+  const seenModeRef = useRef<FileTab["mode"] | null>(null);
   const targetLine = revealLine?.line ?? null;
   const lineCount = useMemo(() => {
     let count = 1;
@@ -205,7 +215,27 @@ function TextFileView({
     return count;
   }, [content]);
   useEffect(() => {
-    if (tab.isEditing) return;
+    // Recorded before the mode check, so a tab that spent its first renders in
+    // preview still counts as seen once it flips to read.
+    const isSameFile = seenPathRef.current === tab.path;
+    const previousMode = seenModeRef.current;
+    seenPathRef.current = tab.path;
+    seenModeRef.current = tab.mode;
+    // Only the read branch mounts the viewer this reaches for. In preview the
+    // query below would find nothing and reschedule itself every frame for as
+    // long as the tab stays open.
+    if (tab.mode !== "read") return;
+    // Flipping THIS file from preview to read with find open is what ⌘F on a
+    // preview tab produces. The viewer mounts fresh, scrolled to the end, so
+    // something has to place it — at the hit find is about to select (the one
+    // at the caret, which is where the index effect lands), not at the top.
+    // Only from preview, and only this file: another file's first render still
+    // carries the previous tab's query, and Edit to Read pins as it always has.
+    const findLine =
+      isSameFile && previousMode === "preview" && isFindOpen
+        ? matches[matchIndexAt(matches, caretRef.current)]?.line ?? null
+        : null;
+    const placeLine = targetLine ?? findLine;
     const root = viewRef.current;
     if (root === null) return;
 
@@ -223,7 +253,7 @@ function TextFileView({
       }
 
       const place = () => {
-        if (targetLine === null) {
+        if (placeLine === null) {
           port.scrollTop = 0;
           return;
         }
@@ -231,7 +261,7 @@ function TextFileView({
         // height and the content height divides evenly by the line count.
         const lineHeight = port.scrollHeight / lineCount;
         // A third of the way down, so the hit has context above it.
-        port.scrollTop = Math.max(0, (targetLine - 1) * lineHeight - port.clientHeight / 3);
+        port.scrollTop = Math.max(0, (placeLine - 1) * lineHeight - port.clientHeight / 3);
       };
       place();
 
@@ -261,14 +291,17 @@ function TextFileView({
       window.clearTimeout(timer);
       observer?.disconnect();
     };
-    // The nonce re-places the view when the same hit is opened again.
+    // `matches` is read but not depended on: typing in the find bar or stepping
+    // to the next hit must not re-run this and pin a file the reader is already
+    // moving around in. The reveal nonce IS depended on: opening the same search
+    // hit again re-places.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.path, tab.isEditing, targetLine, revealLine?.nonce]);
+  }, [tab.path, tab.mode, targetLine, revealLine?.nonce]);
 
   // In the editor there is no host viewer to scroll for us: put the caret at
   // the start of the revealed line, which the selection effect scrolls to.
   useEffect(() => {
-    if (!tab.isEditing || revealLine === null) return;
+    if (tab.mode !== "edit" || revealLine === null) return;
     let offset = 0;
     for (let line = 1; line < revealLine.line && offset !== -1; line += 1) {
       offset = content.indexOf("\n", offset);
@@ -285,7 +318,14 @@ function TextFileView({
     });
     // Keyed on the nonce: re-running on every keystroke would yank the caret.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealLine?.nonce, tab.isEditing]);
+  }, [revealLine?.nonce, tab.mode]);
+
+  // Rendering is one synchronous parse of the whole document, so it runs when
+  // the text changes, not on every render the workspace around it causes.
+  const markdown = useMemo(
+    () => (tab.mode === "preview" ? <Markdown content={content} /> : null),
+    [content, tab.mode],
+  );
 
   // A find hit wins while the find bar is in use; otherwise the search hit.
   const highlighted =
@@ -312,7 +352,7 @@ function TextFileView({
         />
       ) : null}
       <SaveNotice tab={tab} onReload={onReload} onOverwrite={onOverwrite} />
-      {tab.isEditing ? (
+      {tab.mode === "edit" ? (
         <CodeEditor
           path={tab.path}
           value={content}
@@ -323,6 +363,32 @@ function TextFileView({
             caretRef.current = position;
           }}
         />
+      ) : tab.mode === "preview" ? (
+        // The mirror image of the branch below. Markdown's root is a plain
+        // block that grows to its content and owns no scrolling at all, so the
+        // scrollport has to come from here, or the pane is simply clipped at
+        // the first screen. The inner div is only a measure: prose run to the
+        // full width of a widescreen panel is unreadable, and the host styles
+        // everything within it.
+        //
+        // `content` is the draft where there is one — flipping to Preview
+        // mid-edit has to show what the tab's dirty dot is promising.
+        // Keyed: this div is the scrollport, and React would otherwise reuse
+        // the node across a tab switch, opening the next document at the
+        // scroll offset of the last one.
+        // Focusable and named, like the editor: PageDown scrolls it without a
+        // click first, and a screen reader can tell the panes apart.
+        <div
+          key={tab.path}
+          tabIndex={0}
+          role="region"
+          aria-label={`Preview of ${tab.path}`}
+          className="min-h-0 flex-1 overflow-auto focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+        >
+          <div className="mx-auto w-full max-w-[52rem] p-5">
+            {markdown}
+          </div>
+        </div>
       ) : (
         // Deliberately NOT wrapped in a scroll container. SourceCode's own root
         // is `flex-1 overflow-y-auto` — it means to be the scrollport. Wrapping
@@ -493,7 +559,7 @@ function SaveNotice({
   if (tab.save.kind === "error") {
     return <NoticeRow tone="error">{tab.save.message}</NoticeRow>;
   }
-  if (tab.file?.kind === "text" && !tab.file.editable && tab.isEditing) {
+  if (tab.file?.kind === "text" && !tab.file.editable && tab.mode === "edit") {
     return (
       <NoticeRow tone="warning">
         This file is too large to edit here — it is shown read-only.
