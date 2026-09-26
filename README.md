@@ -9,9 +9,11 @@ searchable across every file in the project.
 
 ![The file tree, editor tabs, and find in the open file](https://raw.githubusercontent.com/abdoutelb/bb-plugin-files-editor/main/docs/find-in-file.png)
 
-*Illustrations of the layout, not screenshots — drawn from `docs/preview.html`
-and `docs/find-in-file.html` with invented project data, so no real repository or
-thread titles appear in them.*
+![A markdown file opened in Preview: the README rendered as a document, with the Preview / Read / Edit toggle](https://raw.githubusercontent.com/abdoutelb/bb-plugin-files-editor/main/docs/md-preview.png)
+
+*Illustrations of the layout, not screenshots — drawn from `docs/preview.html`,
+`docs/find-in-file.html` and `docs/md-preview.html` with invented project data, so
+no real repository or thread titles appear in them.*
 
 ## What it gives you
 
