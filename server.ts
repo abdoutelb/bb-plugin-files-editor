@@ -260,9 +260,13 @@ export default function plugin(bb: BbPluginApi) {
     }
   }
 
+  const hostNames = new Map<string, string>();
   async function hostName(hostId: string): Promise<string> {
+    const known = hostNames.get(hostId);
+    if (known !== undefined) return known;
     try {
       const host = await bb.sdk.hosts.get({ hostId });
+      hostNames.set(hostId, host.name);
       return host.name;
     } catch {
       return "this machine";
@@ -296,8 +300,34 @@ export default function plugin(bb: BbPluginApi) {
     return { root: source.path, hostId: source.hostId, name: found.name };
   }
 
+  // Every read, write and tree call resolves its scope, and resolving is up to
+  // six serial SDK round-trips (thread, environment, project — a 404 then a
+  // full list for the personal project — host id, host name). Opening a file
+  // paid all of them each time. Only successes are kept, and briefly, so an
+  // environment that finishes provisioning is picked up within the TTL.
+  const SCOPE_TTL_MS = 30_000;
+  const resolvedScopes = new Map<
+    string,
+    { at: number; value: Promise<Awaited<ReturnType<typeof resolveScopeUncached>>> }
+  >();
+
+  function resolveScope(scope: Scope) {
+    const key = `${scope.kind}:${scope.id}`;
+    const cached = resolvedScopes.get(key);
+    if (cached !== undefined && Date.now() - cached.at < SCOPE_TTL_MS) {
+      return cached.value;
+    }
+    const value = resolveScopeUncached(scope);
+    resolvedScopes.set(key, { at: Date.now(), value });
+    const forget = () => {
+      if (resolvedScopes.get(key)?.value === value) resolvedScopes.delete(key);
+    };
+    value.then((result) => (result.ok ? undefined : forget()), forget);
+    return value;
+  }
+
   /** Turn whatever the caller pointed at into one browsable directory. */
-  async function resolveScope(
+  async function resolveScopeUncached(
     scope: Scope,
   ): Promise<{ ok: true; scope: ResolvedScope } | { ok: false; reason: string }> {
     let environmentId: string | null = null;
@@ -316,14 +346,17 @@ export default function plugin(bb: BbPluginApi) {
     if (environmentId !== null) {
       const environment = await bb.sdk.environments.get({ environmentId });
       if (environment.path !== null) {
-        const owner = await project(environment.projectId);
-        const local = await localHostId();
+        const [owner, local, name] = await Promise.all([
+          project(environment.projectId),
+          localHostId(),
+          hostName(environment.hostId),
+        ]);
         return {
           ok: true,
           scope: {
             root: environment.path,
             hostId: environment.hostId,
-            hostName: await hostName(environment.hostId),
+            hostName: name,
             isLocal: environment.hostId === local,
             label: owner?.name ?? "Workspace",
             sublabel:
@@ -350,13 +383,16 @@ export default function plugin(bb: BbPluginApi) {
     const resolved = await projectRoot(projectId);
     if (typeof resolved === "string") return { ok: false, reason: resolved };
 
-    const local = await localHostId();
+    const [local, name] = await Promise.all([
+      localHostId(),
+      hostName(resolved.hostId),
+    ]);
     return {
       ok: true,
       scope: {
         root: resolved.root,
         hostId: resolved.hostId,
-        hostName: await hostName(resolved.hostId),
+        hostName: name,
         isLocal: resolved.hostId === local,
         label: resolved.name,
         sublabel: "project checkout",
