@@ -72,8 +72,12 @@ built around the fact that you refine a query while you type it:
   every search after that re-runs the pattern over text already in memory.
 - **The file list is reused while you type**, instead of walking the workspace
   again for every keystroke.
-- **Every search cancels the one it replaces**, on the server as well as in the
-  view, so a fast typist never queues a backlog.
+- **Every search cancels the one it replaces**, on the machine doing the search
+  as well as in the view, so a fast typist never queues a backlog.
+- **It runs where the files are.** Listing and search run in the plugin's host
+  process, which BB starts on the machine the workspace lives on — this one or
+  a connected one — so every read is a local disk read and only the matches
+  travel back.
 - **Files are read in parallel**, binaries are skipped by extension before they
   are opened and by content after, and anything over 2 MB is left out.
 - **It stops early.** A very common word stops at 2,000 hits rather than
@@ -81,7 +85,7 @@ built around the fact that you refine a query while you type it:
 
 Measured on a 6,176-file Laravel project:
 
-| search | time on the server |
+| search | search time |
 |---|---|
 | first search after the plugin loads | ~600 ms |
 | the same search again | **~65 ms** |
@@ -89,24 +93,18 @@ Measured on a 6,176-file Laravel project:
 | a regular expression | ~107 ms |
 | a very common word, stopping at the cap | ~8 ms |
 
-**A regex cannot freeze BB.** This plugin runs inside BB's own server process.
-A pattern that backtracks catastrophically — `(a+)+$` against a long run of `a`s —
-would block that process for minutes. So a regex runs in its own worker thread
+**A regex cannot freeze the search.** A pattern that backtracks catastrophically
+— `(a+)+$` against a long run of `a`s — would block the process running it for
+minutes. So a regex runs in its own worker thread
 with a 3-second deadline, and one that overruns is stopped and reported as too
 slow. Plain-text and whole-word searches are escaped before they run, which
 makes them linear, so they stay on the fast path.
 
 ## Dotfiles
 
-BB's own recursive listing drops every name starting with `.`, which is why
-`.github`, `.env.example`, and `.gitignore` are missing from other file trees in
-the app. For a workspace on the machine BB's server runs on, this plugin walks
-the directory itself and shows them; the eye toggle in the explorer turns them
-off.
-
-A workspace on a *connected* machine has to go through BB's listing, so dotfiles
-are not available there and the toggle is hidden. The explorer says which mode
-it is in.
+`.github`, `.env.example`, `.gitignore` and the rest are listed and searched on
+every workspace, on this machine or a connected one. The eye toggle in the
+explorer hides them.
 
 ## The CLI
 
@@ -154,12 +152,13 @@ bb plugin dev                         # rebuild + reload on save
 `lib/` holds the logic worth testing on its own — tree assembly, the fuzzy
 ranker, in-file find, project-wide text search and its content cache, workspace
 grouping, workspace-relative path resolution, route encoding, what counts as
-previewable markdown. `server.ts` is mostly wiring; the components are the view.
+previewable markdown. `host.ts` is the part that runs on the workspace's
+machine (listing and search); `server.ts` is mostly wiring; the components are
+the view.
 
 ## Limits
 
-- The local walk stops at 40,000 entries and BB's remote listing at 10,000, and
-  the explorer mounts at most 600 rows at a time. The footer says when either
+- The listing stops at 40,000 entries, and the explorer mounts at most 600 rows at a time. The footer says when either
   limit is in play; widening *Excluded directories* is the fix for a truncated
   listing.
 - Every `bb files` command is capped by BB's 1 MB limit on a command's output.
@@ -183,13 +182,12 @@ previewable markdown. `server.ts` is mostly wiring; the components are the view.
 - Search in files stops at 2,000 hits, 500 files or 10 seconds, and says so.
   It honours *Excluded directories*, skips binaries and files over 2 MB, and
   searches dotfiles only when the eye toggle shows them.
-- A regex runs in its own worker thread with a 3-second deadline. The plugin
-  lives inside BB's server, so a pattern that backtracks catastrophically would
-  otherwise freeze all of BB; instead it is stopped and reported. Patterns use
-  JavaScript syntax.
-- On a connected machine, search goes through BB's file API one file at a time:
-  it covers the first 3,000 files, keeps them for a minute, and cannot see
-  dotfiles.
+- A regex runs in its own worker thread with a 3-second deadline, so a pattern
+  that backtracks catastrophically is stopped and reported instead of stalling
+  every search after it. Patterns use JavaScript syntax.
+- File contents are kept between searches and re-checked against each file's
+  size and modification time at most every 3 seconds, so an edit made outside
+  the editor shows up in results within that long.
 - Files over 4 MB open read-only, and markdown over 1,048,576 characters opens
   as source — rendering is one pass over the whole document, with nothing
   virtualized.

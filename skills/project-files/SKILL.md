@@ -14,7 +14,7 @@ one.
 bb files root                 # where the workspace is, and on which machine
 bb files tree                 # every file, workspace-relative
 bb files tree --depth 2       # only the top two levels
-bb files tree --all           # include dotfiles (local workspaces only)
+bb files tree --all           # include dotfiles
 bb files find auth cont       # fuzzy match against full paths
 bb files read config/auth.php # print one file
 ```

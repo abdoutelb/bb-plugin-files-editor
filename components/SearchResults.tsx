@@ -175,12 +175,10 @@ function Summary({
         : result.reason === "listing"
           ? " · not every file was searched"
           : "";
-  const remote = result.listing === "remote" ? " · dotfiles not searched on a connected machine" : "";
   return (
     <>
       {matches} in {files}
       {cut}
-      {remote}
     </>
   );
 }

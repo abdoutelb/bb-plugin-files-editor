@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { shouldFallBackToBbListing, walkDirectory } from "./walk.js";
+import { walkDirectory } from "./walk.js";
 
 let root: string;
 
@@ -77,28 +77,3 @@ describe("walkDirectory", () => {
     await expect(walk({ root: path.join(root, "gone") })).rejects.toThrow();
   });
 });
-
-describe("shouldFallBackToBbListing", () => {
-  it("refuses to fall back for a root that is gone", () => {
-    // BB answers these with an empty success, which would read as "this
-    // workspace has no files" rather than "this workspace is missing".
-    expect(shouldFallBackToBbListing(errorWithCode("ENOENT"))).toBe(false);
-    expect(shouldFallBackToBbListing(errorWithCode("ENOTDIR"))).toBe(false);
-  });
-
-  it("falls back when this process merely cannot read the root", () => {
-    for (const code of ["EACCES", "EPERM", "EMFILE", "ELOOP"]) {
-      expect(shouldFallBackToBbListing(errorWithCode(code))).toBe(true);
-    }
-  });
-
-  it("falls back for anything without an errno code", () => {
-    expect(shouldFallBackToBbListing(new Error("boom"))).toBe(true);
-    expect(shouldFallBackToBbListing(null)).toBe(true);
-    expect(shouldFallBackToBbListing("nope")).toBe(true);
-  });
-});
-
-function errorWithCode(code: string): NodeJS.ErrnoException {
-  return Object.assign(new Error(code), { code });
-}
