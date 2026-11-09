@@ -3,6 +3,8 @@ import path from "node:path";
 import type { Dirent } from "node:fs";
 import type { FlatEntry } from "./tree.js";
 
+const WALK_CONCURRENCY = 32;
+
 export interface WalkOptions {
   root: string;
   excludedNames: ReadonlySet<string>;
@@ -80,15 +82,24 @@ export async function walkDirectory(options: WalkOptions): Promise<WalkResult> {
   const rootDirents = await fs.readdir(options.root, { withFileTypes: true });
   if (!visit(rootDirents, options.root, "")) return { entries, truncated };
 
-  while (queue.length > 0) {
-    const next = queue.shift()!;
-    let dirents;
-    try {
-      dirents = await fs.readdir(next.absolute, { withFileTypes: true });
-    } catch {
-      continue;
+  // Directories are read WALK_CONCURRENCY at a time but visited in queue order,
+  // so the result stays the same breadth-first listing a serial walk produces.
+  // `head` instead of `shift()`: shifting a 10k-entry queue is O(n) each time.
+  let head = 0;
+  walk: while (head < queue.length) {
+    const batch = queue.slice(head, head + WALK_CONCURRENCY);
+    head += batch.length;
+    const listed = await Promise.all(
+      batch.map((next) =>
+        fs.readdir(next.absolute, { withFileTypes: true }).catch(() => null),
+      ),
+    );
+    for (let index = 0; index < batch.length; index += 1) {
+      const dirents = listed[index];
+      if (dirents === null || dirents === undefined) continue;
+      const next = batch[index]!;
+      if (!visit(dirents, next.absolute, next.prefix)) break walk;
     }
-    if (!visit(dirents, next.absolute, next.prefix)) break;
   }
 
   return { entries, truncated };
