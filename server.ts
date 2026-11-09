@@ -260,13 +260,9 @@ export default function plugin(bb: BbPluginApi) {
     }
   }
 
-  const hostNames = new Map<string, string>();
   async function hostName(hostId: string): Promise<string> {
-    const known = hostNames.get(hostId);
-    if (known !== undefined) return known;
     try {
       const host = await bb.sdk.hosts.get({ hostId });
-      hostNames.set(hostId, host.name);
       return host.name;
     } catch {
       return "this machine";
@@ -694,7 +690,9 @@ export default function plugin(bb: BbPluginApi) {
     },
 
     async write({ scope, path: relativePath, content, expectedSha256 }) {
-      const resolved = await resolveScope(scope);
+      // Never write through a cached scope: an environment removed or moved in
+      // the last few seconds must not receive the save at its old path.
+      const resolved = await resolveScopeUncached(scope);
       if (!resolved.ok) throw new Error(resolved.reason);
 
       const absolutePath = resolveWithinRoot(resolved.scope.root, relativePath);
