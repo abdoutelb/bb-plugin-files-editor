@@ -4,8 +4,8 @@
   "description": "VS Code-style file explorer and editor for the project or worktree behind a thread: search in files across the whole project, a file tree, editor tabs, syntax-highlighted viewing, find in file, and edit with save.",
   "type": "module",
   "engines": {
-    "bb": ">=0.40",
-    "bbPluginSdk": ">=0.4.21"
+    "bb": ">=0.48",
+    "bbPluginSdk": ">=0.6.88"
   },
   "bb": {
     "name": "Files",
@@ -14,6 +14,7 @@
       "icon": "./assets/icon.svg"
     },
     "server": "./server.ts",
+    "host": "./host.ts",
     "app": "./app.tsx",
     "skills": [
       "skills"
@@ -31,7 +32,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.4.34",
+    "@get-bb/plugin-sdk": "0.6.132",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
@@ -92,6 +93,7 @@
     "docs",
     "dist",
     "server.ts",
+    "host.ts",
     "app.tsx",
     "components",
     "lib",

@@ -5,10 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   LocalTextCache,
   MAX_SEARCH_FILE_BYTES,
-  REMOTE_SEARCH_FILE_LIMIT,
-  RemoteTextCache,
   createLocalSource,
-  createRemoteSource,
 } from "./search-sources.js";
 
 let dir: string;
@@ -103,38 +100,5 @@ describe("createLocalSource", () => {
       cache: new LocalTextCache(),
     });
     await expect(source.read("../../etc/passwd")).rejects.toThrow(/escapes the workspace/);
-  });
-});
-
-describe("createRemoteSource", () => {
-  it("bounds how many files a remote search reads", async () => {
-    const paths = Array.from({ length: REMOTE_SEARCH_FILE_LIMIT + 5 }, (_, i) => `f${i}.txt`);
-    const source = createRemoteSource({
-      root: "/srv/app",
-      hostId: "host_1",
-      list: async () => ({ paths, truncated: false }),
-      readRemote: async () => ({ text: "" }),
-      cache: new RemoteTextCache(),
-    });
-    const listed = await source.list();
-    expect(listed.paths).toHaveLength(REMOTE_SEARCH_FILE_LIMIT);
-    expect(listed.truncated).toBe(true);
-  });
-
-  it("reads each remote file once while it is fresh", async () => {
-    let reads = 0;
-    const source = createRemoteSource({
-      root: "/srv/app",
-      hostId: "host_1",
-      list: async () => ({ paths: ["a.ts"], truncated: false }),
-      readRemote: async () => {
-        reads += 1;
-        return { text: "remote" };
-      },
-      cache: new RemoteTextCache(),
-    });
-    expect(await source.read("a.ts")).toBe("remote");
-    expect(await source.read("a.ts")).toBe("remote");
-    expect(reads).toBe(1);
   });
 });

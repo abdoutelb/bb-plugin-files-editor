@@ -26,8 +26,8 @@ interface CachedFile {
  * size and mtime. This is what makes refining a query fast: after the first
  * search, a keystroke re-runs the pattern over text already in memory.
  *
- * Only ever holds files from the machine this server runs on — node:fs reads
- * THIS disk, so the caller must not use it for a connected machine's paths.
+ * Lives in the plugin's host entry, so it only ever holds files from the
+ * machine the workspace is on.
  */
 export class LocalTextCache {
   private readonly entries = new Map<string, CachedFile>();
@@ -125,65 +125,6 @@ export function createLocalSource(options: {
     async read(path) {
       if (hasBinaryExtension(path)) return null;
       return options.cache.get(resolveWithinRoot(options.root, path));
-    },
-  };
-}
-
-/**
- * A connected machine, through BB's file API. There is no cheap way to ask it
- * "has this changed", so remote text is kept for a short while and searching is
- * bounded — every file is a round trip.
- */
-export const REMOTE_SEARCH_FILE_LIMIT = 3000;
-const REMOTE_TTL_MS = 60_000;
-
-export class RemoteTextCache {
-  private readonly entries = new Map<string, { text: string | null; at: number }>();
-
-  constructor(private readonly now: () => number = Date.now) {}
-
-  get(key: string): string | null | undefined {
-    const entry = this.entries.get(key);
-    if (entry === undefined) return undefined;
-    if (this.now() - entry.at > REMOTE_TTL_MS) {
-      this.entries.delete(key);
-      return undefined;
-    }
-    return entry.text;
-  }
-
-  set(key: string, text: string | null): void {
-    this.entries.set(key, { text, at: this.now() });
-  }
-
-  delete(key: string): void {
-    this.entries.delete(key);
-  }
-}
-
-export function createRemoteSource(options: {
-  root: string;
-  hostId: string;
-  list: () => Promise<{ paths: string[]; truncated: boolean }>;
-  readRemote: (absolutePath: string) => Promise<{ text: string | null }>;
-  cache: RemoteTextCache;
-}): SearchSource {
-  return {
-    concurrency: 8,
-    async list() {
-      const listed = await options.list();
-      if (listed.paths.length <= REMOTE_SEARCH_FILE_LIMIT) return listed;
-      return { paths: listed.paths.slice(0, REMOTE_SEARCH_FILE_LIMIT), truncated: true };
-    },
-    async read(path) {
-      if (hasBinaryExtension(path)) return null;
-      const absolutePath = resolveWithinRoot(options.root, path);
-      const key = `${options.hostId}\u0000${absolutePath}`;
-      const cached = options.cache.get(key);
-      if (cached !== undefined) return cached;
-      const { text } = await options.readRemote(absolutePath);
-      options.cache.set(key, text);
-      return text;
     },
   };
 }

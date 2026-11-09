@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -11,28 +10,13 @@ import { z } from "zod";
 import type { FlatEntry } from "./lib/tree.js";
 import { rankEntries } from "./lib/tree.js";
 import { resolveWithinRoot } from "./lib/paths.js";
-import {
-  parseExcludedNames,
-  shouldFallBackToBbListing,
-  walkDirectory,
-} from "./lib/walk.js";
+import { parseExcludedNames } from "./lib/walk.js";
 import { clipForCli, clipLinesForCli } from "./lib/cli-output.js";
 import {
-  createInProcessExecutor,
-  createWorkerExecutor,
-} from "./lib/regex-worker.js";
-import { runSearch } from "./lib/search-run.js";
-import {
-  LocalTextCache,
-  MAX_SEARCH_FILE_BYTES,
-  RemoteTextCache,
-  createLocalSource,
-  createRemoteSource,
-} from "./lib/search-sources.js";
-
-/** BB's own recursive listing is capped at 10k; the local walk gets more room. */
-const LOCAL_ENTRY_LIMIT = 40_000;
-const REMOTE_ENTRY_LIMIT = 10_000;
+  entrySchema,
+  hostContract,
+  searchOutcomeSchema,
+} from "./lib/host-contract.js";
 
 /** Text past this is shown read-only — a textarea stops being usable long before. */
 const MAX_EDITABLE_BYTES = 4 * 1024 * 1024;
@@ -63,11 +47,6 @@ const workspaceSchema = z.object({
   kind: z.enum(["project", "environment"]),
 });
 
-const entrySchema = z.object({
-  path: z.string(),
-  kind: z.enum(["file", "directory"]),
-});
-
 const resolvedScopeSchema = z.object({
   root: z.string(),
   hostId: z.string(),
@@ -79,36 +58,6 @@ const resolvedScopeSchema = z.object({
   environmentId: z.string().nullable(),
   ref: scopeSchema,
 });
-
-const lineMatchSchema = z.object({
-  line: z.number(),
-  column: z.number(),
-  preview: z.string(),
-  ranges: z.array(z.tuple([z.number(), z.number()])),
-  clippedStart: z.boolean(),
-  clippedEnd: z.boolean(),
-});
-
-const searchOutcomeSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("ok"),
-    files: z.array(
-      z.object({
-        path: z.string(),
-        matchCount: z.number(),
-        matches: z.array(lineMatchSchema),
-      }),
-    ),
-    totalMatches: z.number(),
-    searchedFiles: z.number(),
-    truncated: z.boolean(),
-    reason: z.enum(["matches", "files", "time", "listing"]).nullable(),
-    durationMs: z.number(),
-    listing: z.enum(["local", "remote"]),
-  }),
-  z.object({ status: z.literal("error"), message: z.string() }),
-  z.object({ status: z.literal("cancelled") }),
-]);
 
 export type SearchResult = z.infer<typeof searchOutcomeSchema>;
 
@@ -135,8 +84,6 @@ export const rpcContract = defineRpcContract({
       scope: resolvedScopeSchema,
       entries: z.array(entrySchema),
       truncated: z.boolean(),
-      /** `remote` listings cannot include dotfiles — BB's API drops them. */
-      listing: z.enum(["local", "remote"]),
       excluded: z.array(z.string()),
     }),
   },
@@ -232,32 +179,21 @@ export default function plugin(bb: BbPluginApi) {
     return parseExcludedNames(excludedDirectories);
   }
 
-  let cachedLocalHostId: string | null = null;
+  const host = bb.hosts.experimental_client({ contract: hostContract });
+
+  let cachedServerHostId: string | null = null;
 
   /**
-   * The daemon running on THIS machine, read from the id file BB's own
-   * primary-host resolution trusts first.
-   *
-   * `system.config().primaryHostId` is deliberately not used as a locality
-   * test: when the data directory has no id file BB falls back to "the only
-   * connected host", which on a headless server is somebody else's laptop.
-   * Walking that host's paths with node:fs would read the server's disk and
-   * quietly serve the wrong machine's files.
+   * The machine BB's server runs on, so a workspace somewhere else can be
+   * labelled with its machine's name. Only a label: listing and search run in
+   * the host entry on the workspace's own machine either way.
    */
-  async function localHostId(): Promise<string | null> {
-    if (cachedLocalHostId !== null) return cachedLocalHostId;
-    const { dataDir } = await bb.sdk.system.config();
-    try {
-      const value = (
-        await readFile(path.join(dataDir, "host-id"), "utf8")
-      ).trim();
-      // Only a successful read is cached, so a daemon that initialises after
-      // this plugin loaded is picked up on the next call.
-      if (value !== "") cachedLocalHostId = value;
-      return cachedLocalHostId;
-    } catch {
-      return null;
-    }
+  async function serverHostId(): Promise<string | null> {
+    if (cachedServerHostId !== null) return cachedServerHostId;
+    // Only a known id is cached, so a daemon that registers after this plugin
+    // loaded is picked up on the next call.
+    cachedServerHostId = (await bb.sdk.system.config()).primaryHostId;
+    return cachedServerHostId;
   }
 
   async function hostName(hostId: string): Promise<string> {
@@ -344,7 +280,7 @@ export default function plugin(bb: BbPluginApi) {
       if (environment.path !== null) {
         const [owner, local, name] = await Promise.all([
           project(environment.projectId),
-          localHostId(),
+          serverHostId(),
           hostName(environment.hostId),
         ]);
         return {
@@ -380,7 +316,7 @@ export default function plugin(bb: BbPluginApi) {
     if (typeof resolved === "string") return { ok: false, reason: resolved };
 
     const [local, name] = await Promise.all([
-      localHostId(),
+      serverHostId(),
       hostName(resolved.hostId),
     ]);
     return {
@@ -402,46 +338,16 @@ export default function plugin(bb: BbPluginApi) {
   async function listEntries(
     scope: ResolvedScope,
     includeHidden: boolean,
-  ): Promise<{
-    entries: FlatEntry[];
-    truncated: boolean;
-    listing: "local" | "remote";
-  }> {
-    const excluded = await excludedNames();
-
-    if (scope.isLocal) {
-      try {
-        const result = await walkDirectory({
-          root: scope.root,
-          excludedNames: excluded,
-          includeHidden,
-          limit: LOCAL_ENTRY_LIMIT,
-        });
-        return { ...result, listing: "local" };
-      } catch (error) {
-        if (!shouldFallBackToBbListing(error)) throw error;
-        // The id file said this machine but the directory is not readable here
-        // (EACCES, EPERM, EMFILE). Let BB try — it knows how to reach the host
-        // even when node:fs cannot.
-        bb.log.warn(
-          `local walk of ${scope.root} failed (${describe(error)}); falling back to BB's listing`,
-        );
-      }
-    }
-
-    // Remote workspaces go through BB, which walks the host daemon. It applies
-    // its own dotfile and node_modules filtering that a plugin cannot turn off.
-    const result = await bb.sdk.files.listPaths({
-      hostId: scope.hostId,
-      path: scope.root,
-      includeFiles: true,
-      includeDirectories: true,
-      limit: REMOTE_ENTRY_LIMIT,
-    });
-    const entries = result.paths
-      .map((entry) => ({ path: entry.path, kind: entry.kind }))
-      .filter((entry) => !isExcluded(entry.path, excluded));
-    return { entries, truncated: result.truncated, listing: "remote" };
+  ): Promise<{ entries: FlatEntry[]; truncated: boolean }> {
+    return host.call(
+      "list",
+      {
+        root: scope.root,
+        includeHidden,
+        excludedNames: [...(await excludedNames())],
+      },
+      { hostId: scope.hostId },
+    );
   }
 
   async function readWorkspaceFile(scope: ResolvedScope, relativePath: string) {
@@ -520,50 +426,6 @@ export default function plugin(bb: BbPluginApi) {
     return previewCache;
   }
 
-  // --- project-wide text search -------------------------------------------
-  //
-  // Held for the life of this load, so contents read by one search are there
-  // for the next. A reload builds fresh ones.
-  const localTexts = new LocalTextCache();
-  const remoteTexts = new RemoteTextCache();
-  // The file list is re-walked at most this often while someone is typing.
-  const SEARCH_LIST_FRESH_MS = 3000;
-  const searchListings = new Map<
-    string,
-    { at: number; paths: string[]; truncated: boolean }
-  >();
-  // One search in flight per workspace: a keystroke supersedes the last one.
-  const runningSearches = new Map<string, AbortController>();
-
-  const SEARCH_LIMITS = { maxMatches: 2000, maxFiles: 500, timeBudgetMs: 10_000 };
-
-  async function listSearchPaths(
-    scope: ResolvedScope,
-    includeHidden: boolean,
-  ): Promise<{ paths: string[]; truncated: boolean }> {
-    const excluded = [...(await excludedNames())].sort().join("\u0000");
-    const key = `${scope.hostId}\u0000${scope.root}\u0000${includeHidden}\u0000${excluded}`;
-    const cached = searchListings.get(key);
-    if (cached !== undefined && Date.now() - cached.at < SEARCH_LIST_FRESH_MS) {
-      return cached;
-    }
-    const listed = await listEntries(scope, includeHidden);
-    const paths = listed.entries
-      .filter((entry) => entry.kind === "file")
-      .map((entry) => entry.path)
-      // Path order, so results read top to bottom the way the tree does and
-      // the same query always shows the same first page.
-      .sort((left, right) => left.localeCompare(right));
-    const fresh = { at: Date.now(), paths, truncated: listed.truncated };
-    searchListings.set(key, fresh);
-    return fresh;
-  }
-
-  function forgetSearchedFile(scope: ResolvedScope, absolutePath: string): void {
-    if (scope.isLocal) localTexts.delete(absolutePath);
-    else remoteTexts.delete(`${scope.hostId}\u0000${absolutePath}`);
-  }
-
   bb.rpc.register(rpcContract, {
     async workspaces() {
       // One request gives every project, its checkouts, and the environments
@@ -618,50 +480,22 @@ export default function plugin(bb: BbPluginApi) {
     async searchText({ scope, query, matchCase, wholeWord, regex, includeHidden }) {
       const resolved = await resolveScope(scope);
       if (!resolved.ok) return { status: "error" as const, message: resolved.reason };
-      const target = resolved.scope;
-
-      const key = `${scope.kind}:${scope.id}`;
-      runningSearches.get(key)?.abort();
-      const controller = new AbortController();
-      runningSearches.set(key, controller);
-
-      const list = () => listSearchPaths(target, includeHidden);
-      const source = target.isLocal
-        ? createLocalSource({ root: target.root, list, cache: localTexts })
-        : createRemoteSource({
-            root: target.root,
-            hostId: target.hostId,
-            list,
-            cache: remoteTexts,
-            async readRemote(absolutePath) {
-              const file = await bb.sdk.files.read({
-                hostId: target.hostId,
-                path: absolutePath,
-                rootPath: target.root,
-              });
-              const usable =
-                file.contentEncoding === "utf8" && file.sizeBytes <= MAX_SEARCH_FILE_BYTES;
-              return { text: usable ? file.content : null };
-            },
-          });
-
-      try {
-        const outcome = await runSearch({
-          source,
-          query: { query, matchCase, wholeWord, regex },
-          limits: SEARCH_LIMITS,
-          signal: controller.signal,
-          now: () => performance.now(),
-          createExecutor: (pattern, flags, isUserRegex) =>
-            isUserRegex
-              ? createWorkerExecutor(pattern, flags)
-              : createInProcessExecutor(pattern, flags),
-        });
-        if (outcome.status !== "ok") return outcome;
-        return { ...outcome, listing: target.isLocal ? ("local" as const) : ("remote" as const) };
-      } finally {
-        if (runningSearches.get(key) === controller) runningSearches.delete(key);
-      }
+      // The host entry reads and searches the files where they are and sends
+      // back only the matches. A newer search on the same workspace cancels
+      // this one there.
+      return host.call(
+        "search",
+        {
+          root: resolved.scope.root,
+          includeHidden,
+          excludedNames: [...(await excludedNames())],
+          query,
+          matchCase,
+          wholeWord,
+          regex,
+        },
+        { hostId: resolved.scope.hostId },
+      );
     },
 
     preview: () => previewLease(),
@@ -678,7 +512,6 @@ export default function plugin(bb: BbPluginApi) {
         scope: resolved.scope,
         entries: listed.entries,
         truncated: listed.truncated,
-        listing: listed.listing,
         excluded: [...(await excludedNames())].sort(),
       };
     },
@@ -714,7 +547,15 @@ export default function plugin(bb: BbPluginApi) {
       }
 
       // The next search must see what was just written, not the cached copy.
-      forgetSearchedFile(resolved.scope, absolutePath);
+      try {
+        await host.call(
+          "forget",
+          { absolutePath },
+          { hostId: resolved.scope.hostId },
+        );
+      } catch (error) {
+        bb.log.warn(`could not drop ${absolutePath} from the search cache: ${describe(error)}`);
+      }
       bb.realtime.publish(CHANGED_CHANNEL, {
         scope,
         path: relativePath,
@@ -874,10 +715,6 @@ export default function plugin(bb: BbPluginApi) {
       }
     },
   });
-}
-
-function isExcluded(entryPath: string, excluded: ReadonlySet<string>): boolean {
-  return entryPath.split("/").some((segment) => excluded.has(segment));
 }
 
 function describe(error: unknown): string {

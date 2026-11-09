@@ -30,7 +30,6 @@ interface TreeState {
   scope: ResolvedScope | null;
   entries: FlatEntry[];
   truncated: boolean;
-  listing: "local" | "remote";
   excluded: string[];
   error: string | null;
 }
@@ -40,7 +39,6 @@ const EMPTY_TREE: TreeState = {
   scope: null,
   entries: [],
   truncated: false,
-  listing: "local",
   excluded: [],
   error: null,
 };
@@ -133,7 +131,6 @@ export function Workspace({
             scope: result.scope,
             entries: result.entries,
             truncated: result.truncated,
-            listing: result.listing,
             excluded: result.excluded,
             error: null,
           });
@@ -438,7 +435,6 @@ export function Workspace({
               isLoading={tree.status === "loading"}
               error={tree.error}
               truncated={tree.truncated}
-              hiddenSupported={tree.listing === "local"}
               includeHidden={includeHidden}
               onToggleHidden={(next) => {
                 setIncludeHidden(next);
@@ -567,7 +563,6 @@ export function Workspace({
           <EmptyEditor
             hasWorkspace={resolved !== null}
             error={tree.error}
-            listing={tree.listing}
             truncated={tree.truncated}
             excluded={tree.excluded}
             onQuickOpen={() => setIsQuickOpen(true)}
@@ -662,14 +657,12 @@ function Breadcrumb({
 function EmptyEditor({
   hasWorkspace,
   error,
-  listing,
   truncated,
   excluded,
   onQuickOpen,
 }: {
   hasWorkspace: boolean;
   error: string | null;
-  listing: "local" | "remote";
   truncated: boolean;
   excluded: readonly string[];
   onQuickOpen: () => void;
@@ -697,11 +690,9 @@ function EmptyEditor({
             .
           </p>
           <p className="max-w-md text-xs text-muted-foreground">
-            {listing === "remote"
-              ? "This workspace is on another machine, so BB lists it — dotfiles are not included."
-              : excluded.length === 0
-                ? "Every file in the workspace is listed."
-                : `Excluding ${excluded.join(", ")}.`}
+            {excluded.length === 0
+              ? "Every file in the workspace is listed."
+              : `Excluding ${excluded.join(", ")}.`}
             {truncated ? " The listing hit its size limit." : ""}
           </p>
         </>

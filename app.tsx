@@ -4,8 +4,8 @@ import {
   useBbContext,
   useBbNavigate,
   useRpc,
+  type ExperimentalThreadTabProps,
   type PluginNavPanelProps,
-  type PluginThreadPanelProps,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 // Statically imported so the explorer's folder/file glyphs paint on the first
@@ -16,6 +16,11 @@ import type { rpcContract } from "./server.js";
 import { Workspace } from "./components/Workspace";
 
 const PANEL_PATH = "files";
+const FILES_TAB = {
+  id: "files",
+  context: { kind: "thread" },
+  availability: "action",
+} as const;
 const LAST_SCOPE_KEY = "files-editor:last-scope";
 
 /**
@@ -110,7 +115,7 @@ function FilesPage({ subPath }: PluginNavPanelProps) {
  * The same explorer beside a thread, pinned to that thread's workspace — the
  * files the agent in this conversation is actually editing.
  */
-function ThreadFilesPanel({ threadId }: PluginThreadPanelProps) {
+function ThreadFilesPanel({ threadId }: ExperimentalThreadTabProps) {
   const [filePath, setFilePath] = useState<string | null>(null);
   const scope = useMemo<ScopeRef>(
     () => ({ kind: "thread", id: threadId }),
@@ -219,24 +224,24 @@ export default definePluginApp((app) => {
     component: FilesPage,
   });
 
-  app.slots.threadPanelAction({
-    id: "files",
+  app.slots.experimental_tab({
+    ...FILES_TAB,
     title: "Project files",
     icon: "Code",
     layout: "flush",
     component: ThreadFilesPanel,
-    run: ({ openPanel }) => {
-      openPanel({ title: "Files" });
+    run: ({ experimental_panel }) => {
+      experimental_panel.openTab({ tab: FILES_TAB, title: "Files" });
     },
   });
 
-  app.slots.commandPaletteAction({
+  app.commands.register({
     id: "open-files",
     title: "Files: browse this thread's project",
     // The palette opens anywhere, but this action needs a thread side panel.
     isAvailable: ({ threadId }) => threadId !== null,
-    run: ({ openPanel }) => {
-      if (!openPanel({ actionId: "files", title: "Files" })) {
+    run: ({ experimental_panel }) => {
+      if (!experimental_panel.openTab({ tab: FILES_TAB, title: "Files" })) {
         toast.error("Open a thread to browse its project files.");
       }
     },

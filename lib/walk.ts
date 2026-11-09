@@ -18,10 +18,10 @@ export interface WalkResult {
 }
 
 /**
- * Recursive listing of a directory that lives on the machine running this
- * plugin. BB's own `files.listPaths` silently drops every dotfile, so a
- * workspace listed through it has no `.github`, `.env`, or `.gitignore` — this
- * walk exists so a local workspace really does show all of its files.
+ * Recursive listing of a directory on the machine running this code: the
+ * plugin's host entry, which BB starts on the machine the workspace lives on.
+ * Exclusions are applied while walking, so an excluded `vendor/` or `.git` is
+ * never read and never counts toward `limit`.
  *
  * Breadth-first by directory: when a workspace is larger than `limit`, what
  * survives is the shallow part of the tree rather than an arbitrary deep
@@ -111,19 +111,4 @@ export function parseExcludedNames(value: string): Set<string> {
     .map((entry) => entry.trim())
     .filter((entry) => entry !== "");
   return new Set(names);
-}
-
-/**
- * Whether a failed local walk should be retried through BB's own listing.
- *
- * BB answers a missing directory with an empty success rather than an error, so
- * handing it a root that is gone would turn a deleted workspace into one that
- * merely looks empty — the exact failure {@link walkDirectory}'s uncaught root
- * read exists to prevent. A root we simply cannot read from this process
- * (permissions, descriptor exhaustion) is worth a second opinion, because BB
- * can reach the host when `node:fs` cannot.
- */
-export function shouldFallBackToBbListing(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | null)?.code;
-  return code !== "ENOENT" && code !== "ENOTDIR";
 }

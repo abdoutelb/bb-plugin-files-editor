@@ -18,8 +18,6 @@ export interface ExplorerProps {
   isLoading: boolean;
   error: string | null;
   truncated: boolean;
-  /** BB's remote listing cannot return dotfiles, so the toggle is disabled. */
-  hiddenSupported: boolean;
   includeHidden: boolean;
   onToggleHidden: (next: boolean) => void;
   onOpenFile: (path: string) => void;
@@ -45,7 +43,6 @@ export function Explorer({
   isLoading,
   error,
   truncated,
-  hiddenSupported,
   includeHidden,
   onToggleHidden,
   onOpenFile,
@@ -198,14 +195,12 @@ export function Explorer({
           label="Go to file by name (⌘P)"
           onClick={onQuickOpen}
         />
-        {hiddenSupported ? (
-          <ExplorerAction
-            icon={includeHidden ? "Eye" : "EyeOff"}
-            label={includeHidden ? "Hide dotfiles" : "Show dotfiles"}
-            isActive={includeHidden}
-            onClick={() => onToggleHidden(!includeHidden)}
-          />
-        ) : null}
+        <ExplorerAction
+          icon={includeHidden ? "Eye" : "EyeOff"}
+          label={includeHidden ? "Hide dotfiles" : "Show dotfiles"}
+          isActive={includeHidden}
+          onClick={() => onToggleHidden(!includeHidden)}
+        />
         <ExplorerAction
           icon="ArrowReloadHorizontal"
           label="Refresh files"
@@ -221,7 +216,7 @@ export function Explorer({
           matchCase={matchCase}
           wholeWord={wholeWord}
           regex={regex}
-          includeHidden={hiddenSupported && includeHidden}
+          includeHidden={includeHidden}
           submitNonce={submitNonce}
           activePath={activePath}
           onOpenMatch={onOpenMatch}
